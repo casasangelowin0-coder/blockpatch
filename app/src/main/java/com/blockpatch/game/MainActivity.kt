@@ -17,6 +17,8 @@ class MainActivity : Activity() {
         web = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true   // saves worlds in localStorage
+            settings.mediaPlaybackRequiresUserGesture = false
+            settings.allowFileAccess = true
             settings.cacheMode = WebSettings.LOAD_DEFAULT
             webViewClient = WebViewClient()
             setBackgroundColor(0xFF15181D.toInt())

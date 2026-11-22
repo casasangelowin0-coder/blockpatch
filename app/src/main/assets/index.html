@@ -5,7 +5,7 @@
 <style>
 :root{--bg:#f3efe6;--fg:#23262b;--pn:#fffdf8;--ac:#2f7d5b;--bd:#cfc8b8;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 @media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#15181d;--fg:#e8e6df;--pn:#1f242b;--ac:#58c08f;--bd:#363d47}}
-*{box-sizing:border-box}html,body{height:100%;margin:0}
+*{box-sizing:border-box}[hidden]{display:none!important}html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,sans-serif;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
 .ov{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:16px;z-index:5;background:var(--bg)}
 .ov.dim{background:rgba(0,0,0,.45)}
@@ -35,7 +35,7 @@ button{font:inherit;color:var(--fg);background:var(--pn);border:1px solid var(--
 .g{display:flex;gap:8px}
 </style></head><body>
 <div id="menu" class="ov"><div>
-<h1>Blockpatch</h1>
+<img src="img/logo.png" alt="Blockpatch" style="width:100%" onload="this.nextElementSibling.style.display='none'" onerror="this.remove()"><h1>Blockpatch</h1>
 <p>Farm, build, trade gems and lock your world. Works offline. Same world name as a friend = build together online.</p>
 <input id="nn" placeholder="Your nickname" maxlength="10" aria-label="Nickname">
 <div id="sw"></div>
@@ -63,6 +63,8 @@ let wname,map,edits,plants,doors,signs,owner,sel=4,P,room=null,peers=[],cam={x:0
 let me={id:Math.random().toString(36).slice(2,6),c:SW[0],n:'',inv:{2:10,4:10,6:10,102:3},g:30,q:0,w:'home'};
 try{const s=JSON.parse(localStorage.getItem('bp:me'));if(s&&s.id)me=Object.assign(me,s)}catch(e){}
 const cv=$('c'),cx=cv.getContext('2d');
+const SHT=new Image();let shOK=0;SHT.onload=()=>shOK=1;SHT.src='img/tiles.png';
+const SFX={};for(const n of['dig','place','harvest','buy']){const a=new Audio('snd/'+n+'.wav');a.preload='auto';SFX[n]=a}
 function hash(s){let h=2166136261;for(const c of s){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return h>>>0}
 function rd(x,s){let h=Math.imul(x+s,2654435761)>>>0;h^=h>>>15;h=Math.imul(h,2246822519)>>>0;return(h>>>0)/4294967296}
 function gen(n){const s=hash(n)%1000,m=new Uint8Array(W*H);
@@ -136,7 +138,7 @@ function tile(t,x,y){const sx=x*T-cam.x,sy=y*T-cam.y;
  if(t==11){const p=plants[x+','+y]||{ty:2,at:0},f=Math.min(1,(Date.now()-p.at)/GROW);cx.fillStyle='#6b4a2b';cx.fillRect(sx+T/2-2,sy+T-8-f*20,4,8+f*20);cx.fillStyle=f<1?'#7bc96a':COL[p.ty];cx.beginPath();cx.arc(sx+T/2,sy+T-10-f*20,5+f*9,0,7);cx.fill();return}
  if(t==12){cx.fillStyle=COL[12];cx.fillRect(sx+5,sy+2,T-10,T-2);cx.fillStyle='#e8c23a';cx.fillRect(sx+T-14,sy+T/2,4,4);return}
  if(t==13){cx.fillStyle='#6b4a2b';cx.fillRect(sx+T/2-2,sy+14,4,T-14);cx.fillStyle=COL[13];cx.fillRect(sx+4,sy+4,T-8,16);return}
- cx.fillStyle=COL[t];cx.fillRect(sx,sy,T,T);cx.strokeStyle='rgba(0,0,0,.18)';cx.strokeRect(sx+.5,sy+.5,T-1,T-1);
+ if(shOK){cx.imageSmoothingEnabled=false;cx.drawImage(SHT,t*16,0,16,16,sx,sy,T,T)}else{cx.fillStyle=COL[t];cx.fillRect(sx,sy,T,T);cx.strokeStyle='rgba(0,0,0,.18)';cx.strokeRect(sx+.5,sy+.5,T-1,T-1)}
  if(t==14){cx.fillStyle='#000';cx.fillText('🔒',sx+T/2,sy+T/2+5)}}
 function draw(){const w=innerWidth,h=innerHeight;
  const g=cx.createLinearGradient(0,0,0,h);g.addColorStop(0,'#8fc9e8');g.addColorStop(1,'#d9efe9');cx.fillStyle=g;cx.fillRect(0,0,w,h);
@@ -149,7 +151,8 @@ function draw(){const w=innerWidth,h=innerHeight;
  const now=Date.now();logs=logs.filter(l=>now-l.t<9000);const ch=$('ch');if(ch.dataset.n!=logs.length+''+(logs[0]?logs[0].t:'')){ch.dataset.n=logs.length+''+(logs[0]?logs[0].t:'');ch.innerHTML='';for(const l of logs){const d=document.createElement('div');d.textContent=l.n+': '+l.s;ch.appendChild(d)}}}
 function person(x,y,c,l){const sx=x*T-cam.x,sy=y*T-cam.y;cx.fillStyle=c;cx.fillRect(sx,sy+10,T*.8,T-10);cx.fillStyle='#f5d3a8';cx.fillRect(sx+2,sy,T*.8-4,12);cx.fillStyle='#000';cx.fillRect(sx+T*.4,sy+4,3,3);cx.font='11px system-ui';cx.fillStyle='#000';cx.fillText(l,sx+T*.4,sy-4)}
 let last=0,acc=0,sv=0,pt=0,ac;
-function snd(f){try{ac=ac||new(window.AudioContext||webkitAudioContext)();const o=ac.createOscillator(),g=ac.createGain();o.frequency.value=f;g.gain.value=.05;o.connect(g);g.connect(ac.destination);o.start();o.stop(ac.currentTime+.07)}catch(e){}}
+function snd(f){const n={200:'dig',330:'place',520:'harvest',440:'buy',600:'buy',700:'buy'}[f],a=n&&SFX[n];if(a){try{a.currentTime=0;a.play().catch(()=>{});return}catch(e){}}snd0(f)}
+function snd0(f){try{ac=ac||new(window.AudioContext||webkitAudioContext)();const o=ac.createOscillator(),g=ac.createGain();o.frequency.value=f;g.gain.value=.05;o.connect(g);g.connect(ac.destination);o.start();o.stop(ac.currentTime+.07)}catch(e){}}
 function toast(s){const t=$('ts');t.textContent=s;t.hidden=false;clearTimeout(toast.h);toast.h=setTimeout(()=>t.hidden=true,1600)}
 function ask(l,d,cb){$('ml').textContent=l;$('mi').value=d;$('md').hidden=false;$('mi').focus();askcb=cb}
 function say(s){s=s.trim().slice(0,80);if(!s)return;logs.push({n:me.n||me.id,s,t:Date.now()});if(room)room.emit('chat',{n:me.n||me.id,s}).catch(()=>{})}
