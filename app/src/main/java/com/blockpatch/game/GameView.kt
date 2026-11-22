@@ -77,6 +77,9 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     private var zoom = 1f
     @Volatile private var zoomReq = 1f
     private var burn = 0f
+    private var flashId = 0
+    private var flashT = 0f
+    private var inAreaId = 0
     private var inLava = false
     private var lavaMsgT = 0f
     // pinch zoom (UI thread)
@@ -92,7 +95,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     private var px = 0f; private var py = 0f; private var vx = 0f; private var vy = 0f
     private var onGround = false
     private var face = 1
-    private var airJumps = 1
+    private var airJumps = 0
     private var coyote = 0f
     private var jumpBuf = 0f
     private var walkT = 0f
@@ -139,6 +142,16 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     private var bannerLines: List<String> = emptyList()
     private var bannerT = 0f
     private var bannerMax = 1f
+    private class Notif(val title: String, val text: String, val color: Int, val icon: Int, val ttl: Float) {
+        var t = 0f; var slide = 0f; var lines: List<String> = emptyList(); var lw = -1f; var y0 = 0f; var y1 = 0f
+    }
+    private val notifs = ArrayList<Notif>()
+    @Volatile private var nbL = 0f
+    @Volatile private var nbT = 0f
+    @Volatile private var nbR = 0f
+    @Volatile private var nbB = 0f
+    @Volatile private var nbCount = 0
+    private var zoomInit = false
     private var lastToast = ""
     private var lastToastT = 0f
 
@@ -192,9 +205,14 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     }
 
     private fun dp(v: Float) = v * dens
+    private fun ud(v: Float) = dp(v) * (prof.hudScale / 100f)
+    private fun opF() = when (prof.ctrlOp) { 0 -> 0.5f; 2 -> 1.7f; 3 -> 2.6f; else -> 1f }
+    private fun a8(base: Int) = (base * opF()).toInt().coerceIn(0, 255)
+    fun applyUiSettings() { if (vw > 0) layoutControls() }
 
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
         vw = w; vh = h
+        if (!zoomInit) { zoomInit = true; zoom = (prof.zoomPct / 100f).coerceIn(ZMIN, ZMAX); zoomReq = zoom }
         baseT = max(24, (h / ROWS).roundToInt())
         T = max(12, (baseT * zoom).roundToInt())
         skyPaint.shader = LinearGradient(0f, 0f, 0f, h.toFloat(), 0xFF7FC1E8.toInt(), 0xFFDDF1EA.toInt(), Shader.TileMode.CLAMP)
@@ -210,21 +228,32 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
 
     private fun layoutControls() {
         val w = vw; val h = vh
-        val b = dp(16f); val s = dp(64f); val g = dp(10f)
+        val k = prof.ctrlScale / 100f
+        val b = dp(16f); val s = dp(64f) * k; val g = dp(10f) * k
         val bot = h - b - insB
-        rL.set(b + insL, bot - s, b + insL + s, bot)
-        rR.set(b + insL + s + g, bot - s, b + insL + s + g + s, bot)
-        val js = dp(76f)
-        rP.set(w - b - insR - js, bot - js, w - b - insR, bot)
-        rJ.set(rP.left - g - js, bot - js, rP.left - g, bot)
-        val sz = dp(46f); val gap = dp(6f); val total = sz * 6 + gap * 5
+        val js = dp(76f) * k
+        if (!prof.leftHand) {
+            rL.set(b + insL, bot - s, b + insL + s, bot)
+            rR.set(b + insL + s + g, bot - s, b + insL + s + g + s, bot)
+            rP.set(w - b - insR - js, bot - js, w - b - insR, bot)
+            rJ.set(rP.left - g - js, bot - js, rP.left - g, bot)
+        } else {
+            rR.set(w - b - insR - s, bot - s, w - b - insR, bot)
+            rL.set(rR.left - g - s, bot - s, rR.left - g, bot)
+            rP.set(b + insL, bot - js, b + insL + js, bot)
+            rJ.set(rP.right + g, bot - js, rP.right + g + js, bot)
+        }
+        val hk = min(k, 1.2f)
+        val sz = dp(46f) * hk; val gap = dp(6f); val total = sz * 6 + gap * 5
         val sx = (w - total) / 2f; val sy = h - dp(8f) - insB - sz
         for (i in 0 until 6) hotR[i].set(sx + i * (sz + gap), sy, sx + i * (sz + gap) + sz, sy + sz)
         tabR.set(w / 2f - dp(34f), sy - dp(22f), w / 2f + dp(34f), sy - dp(2f))
         arrow(arrowL, rL, -1); arrow(arrowR, rR, 1)
-        val zs = dp(40f); val zt = dp(64f) + insT
-        rZi.set(w - dp(8f) - insR - zs, zt, w - dp(8f) - insR, zt + zs)
-        rZo.set(rZi.left, zt + zs + dp(6f), rZi.right, zt + zs * 2 + dp(6f))
+        if (prof.zoomBtns) {
+            val zs = dp(40f) * min(k, 1.3f); val zt = dp(64f) + insT
+            rZi.set(w - dp(8f) - insR - zs, zt, w - dp(8f) - insR, zt + zs)
+            rZo.set(rZi.left, zt + zs + dp(6f), rZi.right, zt + zs * 2 + dp(6f))
+        } else { rZi.setEmpty(); rZo.setEmpty() }
         val cx = rJ.centerX(); val cy = rJ.centerY(); val r = rJ.width() * 0.22f
         arrowJ.reset(); arrowJ.moveTo(cx, cy - r); arrowJ.lineTo(cx + r, cy + r * 0.7f); arrowJ.lineTo(cx - r, cy + r * 0.7f); arrowJ.close()
     }
@@ -361,6 +390,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     private fun down(id: Int, x: Float, y: Float) {
         if (id >= role.size) return
         when {
+            nbCount > 0 && x >= nbL && x <= nbR && y >= nbT && y <= nbB -> { role[id] = 5; val yy = y; queue { dismissNote(yy) } }
             rL.contains(x, y) -> role[id] = 1
             rR.contains(x, y) -> role[id] = 2
             rJ.contains(x, y) -> { role[id] = 3; jumpReq = true }
@@ -422,17 +452,21 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         lastToast = text; lastToastT = time; con(text, color)
     }
 
-    private fun banner(text: String, secs: Float = 2.6f) {
-        textP.textSize = dp(18f)
-        val out = ArrayList<String>(); val max = vw * 0.7f
-        var cur = StringBuilder()
-        for (word in text.split(' ')) {
-            val test = if (cur.isEmpty()) word else "$cur $word"
-            if (textP.measureText(test) > max && cur.isNotEmpty()) { out.add(cur.toString()); cur = StringBuilder(word) } else { cur = StringBuilder(test) }
-        }
-        if (cur.isNotEmpty()) out.add(cur.toString())
-        bannerLines = out.take(4); bannerT = secs; bannerMax = secs
+    private fun banner(text: String, secs: Float = 2.6f) = pushNote(text, "", C_BLUE, 0, secs)
+
+    /** Growtopia-style notification box at the top of the screen (game thread). */
+    private fun pushNote(title: String, text: String = "", color: Int = C_BLUE, icon: Int = 0, secs: Float = 4f, log: Boolean = false) {
+        val dup = notifs.firstOrNull { it.title == title && it.text == text }
+        if (dup != null) { dup.t = 0f; return }
+        notifs.add(Notif(title, text, color, icon, secs))
+        while (notifs.size > 3) notifs.removeAt(0)
+        if (log) prof.addNote(if (text.isEmpty()) title else "$title: $text")
     }
+
+    /** Thread-safe version for the activities (shop, quests...). */
+    fun notifyUser(title: String, text: String = "", color: Int = C_BLUE, icon: Int = 0) = queue { pushNote(title, text, color, icon, 4f, true) }
+
+    private fun dismissNote(y: Float) { for (n in notifs) if (y >= n.y0 && y <= n.y1) n.t = max(n.t, n.ttl - 0.3f) }
 
     fun say(raw: String) = queue { sayNow(raw) }
 
@@ -471,7 +505,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         if (w == null) { w = World(n); w.type = type; w.generate(); w.save(context); created = true }
         world = w
         respawn()
-        pn = 0; dn = 0; fn = 0; hitX = -1; holdTx = -1
+        pn = 0; dn = 0; fn = 0; hitX = -1; holdTx = -1; flashId = 0; flashT = 0f; inAreaId = 0
         con(if (created) "Created world ${n.uppercase()}!" else "Welcome to ${n.uppercase()}", C_GREEN)
         if (w.ownerId == null) con("World is unlocked. Place a World Lock to protect it.", C_YELLOW)
         else con("[LOCKED] World owned by ${w.ownerName}", C_BLUE)
@@ -489,17 +523,23 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         burn = 0f; inLava = false
     }
 
-    private fun maxAir() = if (prof.hasWings) 2 else 1
+    private fun maxAir() = if (prof.hasWings) 1 else 0   // normal jump without wings, double jump with wings
 
     // ---------------------------------------------------------------- update
     private fun update(dt: Float) {
         while (true) { val j = jobs.poll() ?: break; j.run() }
-        if (zoomReq != zoom) { zoom = zoomReq; T = max(12, (baseT * zoom).roundToInt()); camSnap = true }
+        if (zoomReq != zoom) { zoom = zoomReq; T = max(12, (baseT * zoom).roundToInt()); camSnap = true; prof.zoomPct = (zoom * 100f).roundToInt() }
         time += dt
         val w = world ?: return
         for (c in cons) c.t += dt
         while (cons.isNotEmpty() && cons[0].t > 9f) cons.removeAt(0)
         if (bannerT > 0f) bannerT -= dt
+        if (flashT > 0f) flashT -= dt
+        if (notifs.isNotEmpty()) {
+            val itn = notifs.iterator()
+            while (itn.hasNext()) { val n = itn.next(); n.t += dt; n.slide = min(1f, n.slide + dt * 5f); if (n.t >= n.ttl) itn.remove() }
+        }
+        nbCount = notifs.size
         if (bubbleT > 0f) bubbleT -= dt
         if (emoteT > 0f) { emoteT -= dt; if (emoteT <= 0f) emote = 0 }
         if (punchT > 0f) punchT -= dt
@@ -513,6 +553,14 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
             var rem = dt
             while (rem > 0f) { val s = min(rem, 1f / 90f); physics(w, s); rem -= s }
         } else { vx = 0f }
+        if (fadeDir == 0 && w.areas.isNotEmpty()) {
+            val ar = w.areaAt(floor(px + PW / 2).toInt(), floor(py + PH / 2).toInt())
+            val aid = ar?.id ?: 0
+            if (aid != inAreaId) {
+                inAreaId = aid
+                if (ar != null) pushNote(ItemDB[ar.type].name + " area", if (ar.ownerId == prof.uid) "This area is protected by you." else "Locked by ${ar.ownerName}.", C_BLUE, ar.type, 2.5f)
+            }
+        } else if (w.areas.isEmpty()) inAreaId = 0
         walkT += abs(vx) * dt * 1.7f
 
         updateDrops(w, dt); updateParticles(dt)
@@ -614,7 +662,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     private fun lavaTick(w: World, dt: Float) {
         val now = touchesLava(w)
         if (now) {
-            if (!inLava) { sfx.play("deny", 0.7f); toast("Ouch! Lava! Hold jump to get out!", C_RED); lavaMsgT = 0f }
+            if (!inLava) { sfx.play("deny", 0.7f); pushNote("Ouch! Lava!", "Hold jump to swim out before you burn up.", C_RED, Id.LAVA, 3f); lavaMsgT = 0f }
             burn += dt; lavaMsgT -= dt
             if (lavaMsgT <= 0f) {
                 lavaMsgT = 0.25f
@@ -652,10 +700,72 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     }
 
     // ---------------------------------------------------------------- world interaction
-    private fun canEdit(w: World) = w.ownerId == null || w.ownerId == prof.uid
+    /** need: 1 = building (place / plant), 2 = punching (break / harvest). */
+    private fun canTile(w: World, tx: Int, ty: Int, need: Int): Boolean {
+        if (w.ownerId != null) return w.ownerId == prof.uid          // World Lock: owner only
+        val a = w.areaAt(tx, ty) ?: return true                      // unlocked tile
+        if (a.ownerId == prof.uid) return true
+        return a.type == Id.BUILDER_LOCK && (a.mode and need) != 0   // Builder's Lock permissions
+    }
+    private fun canBuild(w: World, tx: Int, ty: Int) = canTile(w, tx, ty, 1)
+    private fun canBreak(w: World, tx: Int, ty: Int) = canTile(w, tx, ty, 2)
 
-    private fun deny(w: World) {
-        sfx.play("deny"); toast("This world is locked by ${w.ownerName}.", C_RED)
+    private fun modeLabel(m: Int) = when (m and 3) {
+        0 -> "others can't build or punch"
+        1 -> "others can only build"
+        2 -> "others can only punch"
+        else -> "others can build and punch"
+    }
+
+    private fun deny(w: World, tx: Int = -1, ty: Int = -1) {
+        sfx.play("deny")
+        val a = if (w.ownerId == null) w.areaAt(tx, ty) else null
+        if (a != null) {
+            flashId = a.id; flashT = 2f
+            val extra = if (a.type == Id.BUILDER_LOCK) " (${modeLabel(a.mode)})" else ""
+            toast("This area is locked by ${a.ownerName}.$extra", C_RED)
+        } else toast("This world is locked by ${w.ownerName}.", C_RED)
+    }
+
+    private fun tapAreaLock(w: World, tx: Int, ty: Int) {
+        if (!inReach(tx, ty)) return toast("Too far away.")
+        val a = w.areaAt(tx, ty) ?: return toast("This lock has no area.", C_YELLOW)
+        flashId = a.id; flashT = 3f
+        val nm = ItemDB[a.type].name
+        if (a.ownerId != prof.uid) return toast("$nm owned by ${a.ownerName}.", C_BLUE)
+        if (a.type == Id.BUILDER_LOCK) {
+            a.mode = (a.mode + 1) and 3; w.dirty = true; sfx.play("equip", 0.6f)
+            toast("$nm: ${modeLabel(a.mode)}. Tap to change.", C_GREEN)
+        } else toast("Your $nm: ${a.tiles.size}/${ItemDB.lockCap(a.type)} tiles. Hold to remove.", C_BLUE)
+    }
+
+    private fun placeAreaLock(w: World, tx: Int, ty: Int, sel: Int) {
+        if (w.ownerId != null) return toast("This world already has a World Lock.", C_RED)
+        val tiles = w.planClaim(tx, ty, ItemDB.lockCap(sel)) ?: return toast("This spot is already locked.", C_RED)
+        if (!prof.take(sel, 1)) return
+        w.set(tx, ty, sel)
+        val a = w.addArea(tx, ty, sel, prof.uid, prof.name, if (sel == Id.BUILDER_LOCK) 1 else 0, tiles)
+        flashId = a.id; flashT = 3f
+        val nm = ItemDB[sel].name
+        sfx.play("lock"); pushNote("$nm placed", "${tiles.size} tiles locked.", C_BLUE, sel, 3.5f, true)
+        con("[${nm.uppercase()}] ${tiles.size}/${ItemDB.lockCap(sel)} tiles protected", C_BLUE)
+        if (sel == Id.BUILDER_LOCK) con("Builder's Lock: others can only build. Tap it to change.", C_YELLOW)
+        addXpAndCheck(5); uiDirty = true
+    }
+
+    private fun removeAreaLock(w: World, a: AreaLock) {
+        if (w !== world || !w.areas.containsKey(a.id)) return
+        w.removeArea(a); w.set(a.x, a.y, Id.AIR)
+        prof.add(a.type, 1); sfx.play("unlock")
+        pushNote("${ItemDB[a.type].name} removed", "${a.tiles.size} tiles are now unprotected.", C_YELLOW, a.type, 3f, true)
+        con("[LOCK REMOVED] ${a.tiles.size} tiles are now unprotected", C_YELLOW); uiDirty = true
+    }
+
+    private fun lockColor(type: Int) = when (type) {
+        Id.SMALL_LOCK -> 0x8FA3B8
+        Id.BIG_LOCK -> 0x3FE07A
+        Id.HUGE_LOCK -> 0xFF5544
+        else -> 0xFFC83A
     }
 
     private fun inReach(tx: Int, ty: Int): Boolean =
@@ -722,9 +832,11 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
             Id.SIGN -> if (first) {
                 if (!inReach(tx, ty)) return toast("Too far away.")
                 val t = w.texts.get(k) ?: ""
-                sfx.play("notify", 0.5f); banner(if (t.isEmpty()) "(blank sign)" else t, 3.5f)
+                sfx.play("notify", 0.5f); pushNote("Sign", if (t.isEmpty()) "(blank sign)" else t, C_WHITE, Id.SIGN, 4f)
             } else if (holdT > 0.7f) punch(w, tx, ty)
             Id.TREE -> if (first) harvest(w, tx, ty)
+            Id.SMALL_LOCK, Id.BIG_LOCK, Id.HUGE_LOCK, Id.BUILDER_LOCK -> if (first) tapAreaLock(w, tx, ty)
+                else if (holdT > 0.8f) punch(w, tx, ty)
             Id.WORLD_LOCK, Id.DIAMOND_LOCK, Id.BLUE_LOCK -> if (first) {
                 val me = w.ownerId == prof.uid
                 toast(if (me) "Your ${ItemDB[id].name}. Hold to remove it." else "${ItemDB[id].name} owned by ${w.ownerName}.", C_BLUE)
@@ -743,7 +855,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         if (item.slot != null) return toast("Equip clothes from your backpack.")
         if (!item.placeable) return toast("${item.name} can't be placed. Open the backpack to use it.")
         if (!inReach(tx, ty)) return toast("Too far away.")
-        if (!canEdit(w)) return deny(w)
+        if (!canBuild(w, tx, ty)) return deny(w, tx, ty)
         if (item.solid && overlapsPlayer(tx, ty)) return
         face = if (tx + 0.5f > px + PW / 2) 1 else -1; punchT = 0.15f
         val k = ty * W + tx
@@ -769,12 +881,14 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
                     }
                 }
             }
+            Id.SMALL_LOCK, Id.BIG_LOCK, Id.HUGE_LOCK, Id.BUILDER_LOCK -> placeAreaLock(w, tx, ty, sel)
             Id.WORLD_LOCK, Id.DIAMOND_LOCK, Id.BLUE_LOCK -> {
                 if (w.ownerId != null) return toast("This world is already locked.", C_RED)
+                if (w.hasForeignAreas(prof.uid)) return toast("Other players have area locks here.", C_RED)
                 prof.take(sel, 1)
                 w.set(tx, ty, sel)
                 w.ownerId = prof.uid; w.ownerName = prof.name; w.lockX = tx; w.lockY = ty
-                sfx.play("lock"); banner("World Locked! Only you can build here.", 3f)
+                sfx.play("lock"); pushNote("World Locked!", "Only you can build here.", C_GREEN, Id.WORLD_LOCK, 3.5f, true)
                 con("[WORLD LOCKED] by ${prof.name}", C_BLUE)
                 prof.addNote("Locked world ${w.name.uppercase()}")
                 addXpAndCheck(10); uiDirty = true
@@ -790,7 +904,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         if (!inReach(tx, ty)) return toast("Too far away.")
         val left = tr.ripeAt() - System.currentTimeMillis()
         if (left > 0) { toast("Growing… ${left / 1000 + 1}s left.", C_YELLOW); return }
-        if (!canEdit(w)) return deny(w)
+        if (!canBreak(w, tx, ty)) return deny(w, tx, ty)
         w.set(tx, ty, Id.AIR)
         face = if (tx + 0.5f > px + PW / 2) 1 else -1; punchT = 0.2f
         val cx = tx + 0.5f; val cy = ty + 0.5f
@@ -809,14 +923,22 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         if (punchCd > 0f) return
         val id = w.get(tx, ty); if (id == Id.AIR) return
         if (!inReach(tx, ty)) return toast("Too far away.")
-        if (ItemDB.isLock(id)) {
+        if (ItemDB.isAreaLock(id)) {
+            val a = w.areaAt(tx, ty)
+            if (a != null && a.ownerId == prof.uid) {
+                punchCd = 0.5f
+                host.confirm("Remove ${ItemDB[id].name}", "Remove this lock? Its ${a.tiles.size} tiles will no longer be protected.") { queue { removeAreaLock(w, a) } }
+            } else deny(w, tx, ty)
+            return
+        }
+        if (ItemDB.isWorldLock(id)) {
             if (w.ownerId == prof.uid) {
                 punchCd = 0.5f
                 host.confirm("Remove World Lock", "Unlock ${w.name.uppercase()}? Anyone will be able to build here.") { queue { unlockWorld(w) } }
             } else deny(w)
             return
         }
-        if (!canEdit(w)) { punchCd = 0.4f; return deny(w) }
+        if (!canBreak(w, tx, ty)) { punchCd = 0.4f; return deny(w, tx, ty) }
         val item = ItemDB[id]
         if (item.hits <= 0) { punchCd = 0.4f; sfx.play("deny", 0.6f); return toast("It's too strong to break.", C_YELLOW) }
         face = if (tx + 0.5f > px + PW / 2) 1 else -1
@@ -854,10 +976,10 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     private fun unlockWorld(w: World) {
         if (w !== world || w.ownerId != prof.uid) return
         val lid = w.get(w.lockX, w.lockY)
-        if (ItemDB.isLock(lid)) w.set(w.lockX, w.lockY, Id.AIR)
+        if (ItemDB.isWorldLock(lid)) w.set(w.lockX, w.lockY, Id.AIR)
         w.ownerId = null; w.ownerName = ""; w.lockX = -1; w.lockY = -1; w.dirty = true
-        prof.add(if (ItemDB.isLock(lid)) lid else Id.WORLD_LOCK, 1)
-        sfx.play("unlock"); banner("World Unlocked", 2f); con("[WORLD UNLOCKED]", C_YELLOW)
+        prof.add(if (ItemDB.isWorldLock(lid)) lid else Id.WORLD_LOCK, 1)
+        sfx.play("unlock"); pushNote("World Unlocked", "Anyone can build here now.", C_YELLOW, Id.WORLD_LOCK, 3f, true); con("[WORLD UNLOCKED]", C_YELLOW)
         prof.addNote("Unlocked world ${w.name.uppercase()}"); uiDirty = true
     }
 
@@ -866,7 +988,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         if (lv > 0) {
             val bonus = 20 * lv
             prof.addGems(bonus)
-            sfx.play("levelup"); banner("LEVEL UP! You are now level $lv  (+$bonus gems)", 3.2f)
+            sfx.play("levelup"); pushNote("LEVEL UP!", "You are now level $lv  (+$bonus gems)", C_YELLOW, Id.T_GEM, 4f, true)
             con("Level up! Level $lv reached. +$bonus gems", C_YELLOW)
             prof.addNote("Reached level $lv")
         }
@@ -915,7 +1037,10 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
 
     private fun collect(item: Int, n: Int, x: Float, y: Float) {
         if (item == GEM) { prof.addGems(n); sfx.play("gem", 0.8f, 0.95f + rnd.nextFloat() * 0.2f); floatText(x, y - 0.5f, "+$n", C_BLUE) }
-        else { prof.add(item, n); sfx.play("pickup", 0.7f); floatText(x, y - 0.5f, "+$n ${ItemDB[item].name}", C_WHITE) }
+        else {
+            prof.add(item, n); sfx.play("pickup", 0.7f); floatText(x, y - 0.5f, "+$n ${ItemDB[item].name}", C_WHITE)
+            prof.autoCompress()?.let { m -> sfx.play("lock"); pushNote("Locks compressed", m, C_BLUE, Id.DIAMOND_LOCK, 4f, true) }
+        }
         uiDirty = true
     }
 
@@ -1000,6 +1125,23 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
                     Id.TREE -> drawTree(c, sx, sy, w.trees.get(row + x), now)
                     Id.LAVA -> drawTile(c, lavaFrame, sx, sy, T)
                     else -> drawTile(c, f, sx, sy, T)
+                }
+            }
+        }
+
+        // ---- locked-area overlay (flashes on tap/placement; faint for all areas while holding a lock)
+        val showAll = ItemDB.isAreaLock(prof.sel)
+        if (w.areas.isNotEmpty() && (showAll || flashT > 0f)) {
+            for (a in w.areas.values) {
+                val flash = a.id == flashId && flashT > 0f
+                if (!flash && !showAll) continue
+                val al = if (flash) (80 + 45 * sin(time * 8f)).toInt().coerceIn(0, 255) else 40
+                fill.color = (al shl 24) or lockColor(a.type)
+                for (k in a.tiles) {
+                    val ax = k % W; val ay = k / W
+                    if (ax < x0 || ax > x1 || ay < y0 || ay > y1) continue
+                    val sx = (ax * T - cxi).toFloat(); val sy = (ay * T - cyi).toFloat()
+                    c.drawRect(sx, sy, sx + T, sy + T, fill)
                 }
             }
         }
@@ -1195,69 +1337,99 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
 
     // ---- HUD ---------------------------------------------------------------
     private fun drawHud(c: Canvas, w: World) {
-        val pad = dp(8f) + insL
-        val padT = dp(8f) + insT
+        val pad = ud(8f) + insL
+        val padT = ud(8f) + insT
         // top-left info pill
-        textP.textSize = dp(13f); textP.textAlign = Paint.Align.LEFT
+        textP.textSize = ud(13f); textP.textAlign = Paint.Align.LEFT
         val title = w.name.uppercase()
         val tw = textP.measureText(title)
-        val lockW = if (w.ownerId != null) dp(20f) else 0f
-        rf.set(pad, padT, pad + tw + dp(20f) + lockW, padT + dp(28f))
-        fill.color = 0x99000000.toInt(); c.drawRoundRect(rf, dp(8f), dp(8f), fill)
-        shadowText(c, title, pad + dp(10f), padT + dp(19f), C_WHITE)
-        if (w.ownerId != null) drawIcon(c, w.get(w.lockX, w.lockY).let { if (ItemDB.isLock(it)) it else Id.WORLD_LOCK }, pad + dp(14f) + tw, padT + dp(6f), dp(16f))
+        val lockW = if (w.ownerId != null) ud(20f) else 0f
+        rf.set(pad, padT, pad + tw + ud(20f) + lockW, padT + ud(28f))
+        fill.color = 0x99000000.toInt(); c.drawRoundRect(rf, ud(8f), ud(8f), fill)
+        shadowText(c, title, pad + ud(10f), padT + ud(19f), C_WHITE)
+        if (w.ownerId != null) drawIcon(c, w.get(w.lockX, w.lockY).let { if (ItemDB.isWorldLock(it)) it else Id.WORLD_LOCK }, pad + ud(14f) + tw, padT + ud(6f), ud(16f))
 
         // gems + level
         if (gemsCache != prof.gems) { gemsCache = prof.gems; gemsStr = prof.gems.toString() }
         val lv = prof.level(); if (lvCache != lv) { lvCache = lv; lvStr = "Lv $lv" }
-        val y2 = padT + dp(34f)
-        val gw = textP.measureText(gemsStr) + textP.measureText(lvStr) + dp(100f)
-        rf.set(pad, y2, pad + gw, y2 + dp(26f)); fill.color = 0x99000000.toInt(); c.drawRoundRect(rf, dp(8f), dp(8f), fill)
-        drawIcon(c, Id.T_GEM, pad + dp(6f), y2 + dp(3f), dp(20f))
-        shadowText(c, gemsStr, pad + dp(30f), y2 + dp(18f), C_BLUE)
-        val lx = pad + dp(34f) + textP.measureText(gemsStr) + dp(10f)
-        shadowText(c, lvStr, lx, y2 + dp(18f), C_YELLOW)
-        val bx = lx + textP.measureText(lvStr) + dp(6f)
-        rf.set(bx, y2 + dp(9f), bx + dp(36f), y2 + dp(17f)); fill.color = 0x66FFFFFF; c.drawRoundRect(rf, dp(4f), dp(4f), fill)
-        rf.set(bx, y2 + dp(9f), bx + dp(36f) * prof.levelProgress(), y2 + dp(17f)); fill.color = 0xFFFFD866.toInt(); c.drawRoundRect(rf, dp(4f), dp(4f), fill)
+        val y2 = padT + ud(34f)
+        val gw = textP.measureText(gemsStr) + textP.measureText(lvStr) + ud(100f)
+        rf.set(pad, y2, pad + gw, y2 + ud(26f)); fill.color = 0x99000000.toInt(); c.drawRoundRect(rf, ud(8f), ud(8f), fill)
+        drawIcon(c, Id.T_GEM, pad + ud(6f), y2 + ud(3f), ud(20f))
+        shadowText(c, gemsStr, pad + ud(30f), y2 + ud(18f), C_BLUE)
+        val lx = pad + ud(34f) + textP.measureText(gemsStr) + ud(10f)
+        shadowText(c, lvStr, lx, y2 + ud(18f), C_YELLOW)
+        val bx = lx + textP.measureText(lvStr) + ud(6f)
+        rf.set(bx, y2 + ud(9f), bx + ud(36f), y2 + ud(17f)); fill.color = 0x66FFFFFF; c.drawRoundRect(rf, ud(4f), ud(4f), fill)
+        rf.set(bx, y2 + ud(9f), bx + ud(36f) * prof.levelProgress(), y2 + ud(17f)); fill.color = 0xFFFFD866.toInt(); c.drawRoundRect(rf, ud(4f), ud(4f), fill)
 
         // console
-        var cy = y2 + dp(34f)
-        textP.textSize = dp(12f)
+        var cy = y2 + ud(34f)
+        textP.textSize = ud(12f)
         for (m in cons) {
             val a = if (m.t > 7.5f) ((9f - m.t) / 1.5f).coerceIn(0f, 1f) else 1f
             val mw = min(textP.measureText(m.text), vw * 0.55f)
-            rf.set(pad, cy, pad + mw + dp(12f), cy + dp(19f))
-            fill.color = ((0x88 * a).toInt() shl 24); c.drawRoundRect(rf, dp(6f), dp(6f), fill)
+            rf.set(pad, cy, pad + mw + ud(12f), cy + ud(19f))
+            fill.color = ((0x88 * a).toInt() shl 24); c.drawRoundRect(rf, ud(6f), ud(6f), fill)
             textP.color = (m.color and 0x00FFFFFF) or ((255 * a).toInt() shl 24)
-            c.save(); c.clipRect(rf); c.drawText(m.text, pad + dp(6f), cy + dp(14f), textP); c.restore()
-            cy += dp(22f)
+            c.save(); c.clipRect(rf); c.drawText(m.text, pad + ud(6f), cy + ud(14f), textP); c.restore()
+            cy += ud(22f)
         }
 
-        // banner
-        if (bannerT > 0f && bannerLines.isNotEmpty()) {
-            val a = min(1f, min(bannerT, bannerMax - bannerT + 0.15f) * 4f).coerceIn(0f, 1f)
-            textP.textSize = dp(18f); textP.textAlign = Paint.Align.CENTER
-            var maxW = 0f; for (l in bannerLines) maxW = max(maxW, textP.measureText(l))
-            val hh = bannerLines.size * dp(24f) + dp(16f)
-            val top = vh * 0.2f
-            rf.set(vw / 2f - maxW / 2 - dp(16f), top, vw / 2f + maxW / 2 + dp(16f), top + hh)
-            fill.color = ((0xCC * a).toInt() shl 24); c.drawRoundRect(rf, dp(12f), dp(12f), fill)
-            var ty = top + dp(28f)
-            for (l in bannerLines) { shadowText(c, l, vw / 2f, ty, (255 * a).toInt() shl 24 or 0x00FFFFFF); ty += dp(24f) }
-            textP.textAlign = Paint.Align.LEFT
+        // notification boxes (top-center, Growtopia style)
+        if (notifs.isNotEmpty()) {
+            val bw = min(vw * 0.55f, ud(340f)).coerceAtLeast(min(vw * 0.9f, ud(220f)))
+            val bx0 = (vw - bw) / 2f
+            val ny0 = insT + ud(8f)
+            var ny = ny0
+            for (n in notifs) {
+                val iconW = if (n.icon != 0) ud(34f) else 0f
+                val textW = bw - ud(24f) - iconW
+                if (n.lw != textW) {
+                    textP.textSize = ud(12f); textP.textAlign = Paint.Align.LEFT
+                    val out = ArrayList<String>(); var cur = ""
+                    for (word in n.text.split(' ')) {
+                        if (word.isEmpty()) continue
+                        val test = if (cur.isEmpty()) word else "$cur $word"
+                        if (textP.measureText(test) > textW && cur.isNotEmpty()) { out.add(cur); cur = word } else cur = test
+                    }
+                    if (cur.isNotEmpty()) out.add(cur)
+                    n.lines = out.take(3); n.lw = textW
+                }
+                val hh = max(ud(44f), ud(32f) + n.lines.size * ud(15f))
+                val ease = 1f - (1f - n.slide) * (1f - n.slide)
+                val a = ((n.ttl - n.t) / 0.35f).coerceIn(0f, 1f)
+                val top = ny - (1f - ease) * (hh + ud(12f))
+                n.y0 = top; n.y1 = top + hh
+                val ai = (255 * a).toInt()
+                rf.set(bx0 - ud(2f), top - ud(2f), bx0 + bw + ud(2f), top + hh + ud(2f))
+                fill.color = ((ai * 0xCC / 255) shl 24) or (n.color and 0xFFFFFF); c.drawRoundRect(rf, ud(14f), ud(14f), fill)
+                rf.set(bx0, top, bx0 + bw, top + hh)
+                fill.color = ((ai * 0xEE / 255) shl 24) or 0x16203A; c.drawRoundRect(rf, ud(12f), ud(12f), fill)
+                var tx0 = bx0 + ud(12f)
+                if (n.icon != 0) { drawIcon(c, n.icon, tx0, top + (hh - ud(28f)) / 2f, ud(28f)); tx0 += iconW }
+                textP.textAlign = Paint.Align.LEFT
+                textP.textSize = ud(13f)
+                val ty0 = if (n.lines.isNotEmpty()) top + ud(20f) else top + hh / 2f + ud(5f)
+                shadowText(c, n.title, tx0, ty0, (ai shl 24) or (n.color and 0xFFFFFF))
+                textP.textSize = ud(12f)
+                var ly = ty0 + ud(16f)
+                for (l in n.lines) { shadowText(c, l, tx0, ly, (ai shl 24) or 0xE6EAF2); ly += ud(15f) }
+                ny += hh + ud(6f)
+            }
+            nbL = bx0; nbR = bx0 + bw; nbT = ny0; nbB = ny - ud(6f)
         }
 
         drawControls(c)
 
-        if (prof.showFps) { textP.textSize = dp(11f); shadowText(c, "$fps fps", vw - dp(150f), vh - dp(100f), C_GREEN) }
+        if (prof.showFps) { textP.textSize = ud(11f); shadowText(c, "$fps fps", vw - ud(150f), vh - ud(100f), C_GREEN) }
     }
 
     private fun drawControls(c: Canvas) {
         for (i in 0..3) {
             val r = when (i) { 0 -> rL; 1 -> rR; 2 -> rJ; else -> rP }
             val on = when (i) { 0 -> holdL; 1 -> holdR; 2 -> jumpHeld; else -> pbDown }
-            fill.color = if (on) 0x88FFFFFF.toInt() else 0x55000000
+            fill.color = if (on) ((a8(0x88) shl 24) or 0xFFFFFF) else (a8(0x55) shl 24)
             if (i >= 2) c.drawCircle(r.centerX(), r.centerY(), r.width() / 2, fill) else c.drawRoundRect(r, dp(16f), dp(16f), fill)
             if (i == 3) { drawIcon(c, Id.FIST, r.centerX() - r.width() * 0.3f, r.centerY() - r.width() * 0.3f, r.width() * 0.6f); continue }
             fill.color = if (on) 0xFF222222.toInt() else 0xBBFFFFFF.toInt()
@@ -1269,9 +1441,9 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
             c.drawCircle(rJ.centerX() + (i - (maxAir() - 1) / 2f) * dp(14f), rJ.top - dp(8f), dp(4.5f), fill)
         }
         // zoom buttons
-        for (z in 0..1) {
+        if (prof.zoomBtns) for (z in 0..1) {
             val r = if (z == 0) rZi else rZo
-            fill.color = 0x55000000; c.drawRoundRect(r, dp(10f), dp(10f), fill)
+            fill.color = (a8(0x55) shl 24); c.drawRoundRect(r, dp(10f), dp(10f), fill)
             fill.color = 0xFFFFFFFF.toInt()
             val cx0 = r.centerX(); val cy0 = r.centerY(); val a = dp(9f); val t0 = dp(1.8f)
             c.drawRect(cx0 - a, cy0 - t0, cx0 + a, cy0 + t0, fill)

@@ -14,6 +14,14 @@ class Tree(@JvmField val seed: Int, @JvmField val planted: Long) {
     fun ripeAt() = planted + growMs()
 }
 
+/** A claimed area: the lock block at (x,y) protects [tiles] (indices y*W+x). */
+class AreaLock(
+    @JvmField val id: Int, @JvmField val x: Int, @JvmField val y: Int, @JvmField val type: Int,
+    @JvmField val ownerId: String, @JvmField val ownerName: String,
+    @JvmField var mode: Int,              // Builder's Lock only: bit0 = others may build, bit1 = others may punch
+    @JvmField val tiles: IntArray
+)
+
 class WorldInfo(val name: String, val type: Int, val ownerId: String, val ownerName: String, val modified: Long)
 
 class World(val name: String) {
@@ -74,6 +82,16 @@ class World(val name: String) {
                     repeat(d.readInt()) { val k = d.readInt(); w.trees.put(k, Tree(d.readInt(), d.readLong())) }
                     repeat(d.readInt()) { val k = d.readInt(); w.links.put(k, d.readUTF()) }
                     repeat(d.readInt()) { val k = d.readInt(); w.texts.put(k, d.readUTF()) }
+                    try {   // area locks (absent in older saves)
+                        repeat(d.readInt()) {
+                            val ax = d.readInt(); val ay = d.readInt(); val at = d.readInt()
+                            val aoid = d.readUTF(); val aon = d.readUTF(); val am = d.readInt()
+                            val n = d.readInt().coerceIn(0, 400)
+                            val tiles = IntArray(n) { d.readInt() }
+                            if (tiles.all { it in 0 until W * H }) w.addArea(ax, ay, at, aoid, aon, am, tiles)
+                        }
+                    } catch (_: EOFException) { }
+                    w.dirty = false
                     w
                 }
             } catch (e: Exception) { null }
@@ -120,6 +138,55 @@ class World(val name: String) {
         fg[k] = id.toByte()
         trees.remove(k); links.remove(k); texts.remove(k)
         dirty = true
+    }
+
+    // ---- area locks (Small / Big / Huge / Builder's)
+    @JvmField val claim = ShortArray(W * H)             // 0 = free, else AreaLock.id
+    @JvmField val areas = HashMap<Int, AreaLock>()
+    private var nextAreaId = 1
+
+    fun areaAt(x: Int, y: Int): AreaLock? {
+        if (!inb(x, y)) return null
+        val c = claim[y * W + x].toInt()
+        return if (c == 0) null else areas[c]
+    }
+
+    fun hasForeignAreas(uid: String) = areas.values.any { it.ownerId != uid }
+
+    /** Flood-fills (8-way, nearest first) up to [max] free tiles around (tx,ty). Null if the origin is already claimed. */
+    fun planClaim(tx: Int, ty: Int, max: Int): IntArray? {
+        if (!inb(tx, ty) || claim[ty * W + tx].toInt() != 0) return null
+        val out = IntArray(max); var n = 0
+        val seen = HashSet<Int>(); val q = ArrayDeque<Int>()
+        val k0 = ty * W + tx; q.add(k0); seen.add(k0)
+        while (q.isNotEmpty() && n < max) {
+            val k = q.removeFirst(); out[n++] = k
+            val x = k % W; val y = k / W
+            for (dy in -1..1) for (dx in -1..1) {
+                if (dx == 0 && dy == 0) continue
+                val nx = x + dx; val ny = y + dy
+                if (!inb(nx, ny)) continue
+                val nk = ny * W + nx
+                if (nk in seen || claim[nk].toInt() != 0) continue
+                val t = fg[nk].toInt()
+                if (t == Id.BEDROCK || t == Id.MAIN_DOOR) continue
+                seen.add(nk); q.add(nk)
+            }
+        }
+        return out.copyOf(n)
+    }
+
+    fun addArea(x: Int, y: Int, type: Int, ownerId: String, ownerName: String, mode: Int, tiles: IntArray): AreaLock {
+        val a = AreaLock(nextAreaId++, x, y, type, ownerId, ownerName, mode, tiles)
+        areas[a.id] = a
+        for (k in tiles) claim[k] = a.id.toShort()
+        dirty = true
+        return a
+    }
+
+    fun removeArea(a: AreaLock) {
+        for (k in a.tiles) if (claim[k].toInt() == a.id) claim[k] = 0
+        areas.remove(a.id); dirty = true
     }
 
     fun nextRipe(): Long {
@@ -177,6 +244,11 @@ class World(val name: String) {
                 d.writeInt(trees.size()); for (i in 0 until trees.size()) { d.writeInt(trees.keyAt(i)); val t = trees.valueAt(i); d.writeInt(t.seed); d.writeLong(t.planted) }
                 d.writeInt(links.size()); for (i in 0 until links.size()) { d.writeInt(links.keyAt(i)); d.writeUTF(links.valueAt(i)) }
                 d.writeInt(texts.size()); for (i in 0 until texts.size()) { d.writeInt(texts.keyAt(i)); d.writeUTF(texts.valueAt(i)) }
+                d.writeInt(areas.size)
+                for (a in areas.values) {
+                    d.writeInt(a.x); d.writeInt(a.y); d.writeInt(a.type); d.writeUTF(a.ownerId); d.writeUTF(a.ownerName)
+                    d.writeInt(a.mode); d.writeInt(a.tiles.size); for (k in a.tiles) d.writeInt(k)
+                }
             }
             if (f.exists()) f.delete()
             tmp.renameTo(f)

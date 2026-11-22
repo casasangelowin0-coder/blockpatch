@@ -24,6 +24,12 @@ class Profile(ctx: Context) {
     var showFps = false
     var fpsLimit = 60      // 0 = unlimited
     var lowGfx = false
+    var ctrlScale = 100    // on-screen button size, percent
+    var ctrlOp = 1         // button opacity level 0..3
+    var leftHand = false   // swap movement / action buttons
+    var hudScale = 100     // HUD + notification size, percent
+    var zoomBtns = true
+    var zoomPct = 100      // remembered camera zoom, percent
     var lastWorldName = "start"
     var sel = Id.FIST
     val inv = SparseIntArray()
@@ -44,6 +50,9 @@ class Profile(ctx: Context) {
         lastDaily = sp.getLong("daily", 0L)
         sound = sp.getBoolean("sound", true); music = sp.getBoolean("music", true)
         showFps = sp.getBoolean("fps", false); fpsLimit = sp.getInt("fpslim", 60); lowGfx = sp.getBoolean("low", false)
+        ctrlScale = sp.getInt("cscale", 100).coerceIn(70, 160); ctrlOp = sp.getInt("cop", 1).coerceIn(0, 3)
+        leftHand = sp.getBoolean("lefth", false); hudScale = sp.getInt("hscale", 100).coerceIn(80, 150)
+        zoomBtns = sp.getBoolean("zbtn", true); zoomPct = sp.getInt("zoom", 100).coerceIn(50, 250)
         sel = sp.getInt("sel", Id.FIST); lastWorldName = sp.getString("lastw", "start") ?: "start"
         val s = sp.getString("inv", null)
         if (s == null) {
@@ -68,6 +77,8 @@ class Profile(ctx: Context) {
         sp.edit().putString("uid", uid).putString("name", name).putInt("color", color).putInt("gems", gems)
             .putInt("xp", xp).putInt("quest", quest).putLong("daily", lastDaily)
             .putBoolean("sound", sound).putBoolean("music", music).putBoolean("fps", showFps)
+            .putInt("cscale", ctrlScale).putInt("cop", ctrlOp).putBoolean("lefth", leftHand)
+            .putInt("hscale", hudScale).putBoolean("zbtn", zoomBtns).putInt("zoom", zoomPct)
             .putString("lastw", lastWorldName).putInt("fpslim", fpsLimit).putBoolean("low", lowGfx).putInt("sel", sel)
             .putString("inv", sb.toString()).putString("equip", equip.joinToString(","))
             .putString("quick", quick.joinToString(",")).putString("notes", notes.joinToString("\n"))
@@ -85,6 +96,20 @@ class Profile(ctx: Context) {
     private fun onDepleted(id: Int) {
         for (i in quick.indices) if (quick[i] == id) quick[i] = 0
         if (sel == id) sel = Id.FIST
+    }
+    /** 100 World Locks -> Diamond Lock, 100 Diamond Locks -> Blue Gem Lock. Returns a message if something was compressed. */
+    @Synchronized fun autoCompress(): String? {
+        var msg: String? = null
+        fun roll(from: Int, to: Int, label: String) {
+            val n = inv.get(from, 0); if (n < 100) return
+            val rem = n % 100
+            if (rem == 0) { inv.delete(from); onDepleted(from) } else inv.put(from, rem)
+            inv.put(to, inv.get(to, 0) + n / 100)
+            msg = label
+        }
+        roll(Id.WORLD_LOCK, Id.DIAMOND_LOCK, "100 World Locks compressed into a Diamond Lock!")
+        roll(Id.DIAMOND_LOCK, Id.BLUE_LOCK, "100 Diamond Locks compressed into a Blue Gem Lock!")
+        return msg
     }
     @Synchronized fun addGems(n: Int) { gems += n }
     @Synchronized fun addQuest() { quest++ }

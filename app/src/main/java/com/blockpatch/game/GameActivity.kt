@@ -239,7 +239,10 @@ class GameActivity : Activity(), GameHost {
                 row.addView(col, LinearLayout.LayoutParams(0, Ui.WRAP, 1f).also { p -> p.leftMargin = dp(10f) })
                 row.addView(Ui.button(this, if (owned) "Owned" else "${o.price} gems", if (owned) Ui.CARD2 else Ui.ACCENT, 13f) {
                     if (owned) return@button
-                    if (prof.spend(o.price)) { prof.add(o.item, o.qty); sfx.play("buy"); game.message("Bought ${it.name}", GameView.C_GREEN) }
+                    if (prof.spend(o.price)) {
+                        prof.add(o.item, o.qty); sfx.play("buy"); game.notifyUser("Purchased", "${it.name} ×${o.qty}", GameView.C_GREEN, o.item)
+                        prof.autoCompress()?.let { m -> sfx.play("lock"); game.notifyUser("Locks compressed", m, GameView.C_BLUE, Id.DIAMOND_LOCK) }
+                    }
                     else { sfx.play("deny"); game.message("Not enough gems.", GameView.C_RED) }
                     showShop()
                 })
@@ -261,12 +264,33 @@ class GameActivity : Activity(), GameHost {
                 c.addView(Ui.text(this, "Harvest 5 trees  (${prof.quest}/5)", 15f, Ui.TEXT, true), Ui.lp(Ui.WRAP, Ui.WRAP, 0f, 8, this))
                 c.addView(Ui.text(this, "Reward: 50 gems. Plant seeds, wait for them to ripen, then tap them.", 12f, Ui.MUTED))
                 c.addView(Ui.button(this, "Claim 50 gems", if (prof.quest >= 5) Ui.ACCENT else Ui.CARD2) {
-                    if (prof.quest >= 5) { prof.quest -= 5; prof.addGems(50); sfx.play("levelup"); game.message("Quest complete! +50 gems", GameView.C_YELLOW) }
+                    if (prof.quest >= 5) { prof.quest -= 5; prof.addGems(50); sfx.play("levelup"); game.notifyUser("Quest complete!", "+50 gems", GameView.C_YELLOW, Id.T_GEM) }
                     else { sfx.play("deny"); game.message("Harvest more trees first.", GameView.C_YELLOW) }
                     showShop()
                 }, Ui.lp(Ui.WRAP, Ui.WRAP, 0f, 10, this))
             }
         }
+    }
+
+    // ------------------------------------------------------------ display & controls
+    private fun showDisplay(): Unit = openSheet("display") { c ->
+        c.addView(Ui.text(this, "Display & Controls", 20f, Ui.TEXT, true))
+        c.addView(Ui.text(this, "Changes apply instantly.", 12f, Ui.MUTED))
+        fun btn(label: String, bg: Int = Ui.CARD2, f: () -> Unit) =
+            c.addView(Ui.button(this, label, bg) { f() }, Ui.lp(Ui.MATCH, Ui.WRAP, 0f, 8, this))
+        fun commit() { prof.save(); game.applyUiSettings(); showDisplay() }
+        val sizes = intArrayOf(80, 100, 125, 150)
+        val ops = arrayOf("Faint", "Normal", "Strong", "Solid")
+        val huds = intArrayOf(85, 100, 120, 140)
+        btn("Button size: ${prof.ctrlScale}%") { prof.ctrlScale = sizes[(sizes.indexOf(prof.ctrlScale) + 1) % sizes.size]; commit() }
+        btn("Button opacity: ${ops[prof.ctrlOp]}") { prof.ctrlOp = (prof.ctrlOp + 1) % ops.size; commit() }
+        btn("UI & text size: ${prof.hudScale}%") { prof.hudScale = huds[(huds.indexOf(prof.hudScale) + 1) % huds.size]; commit() }
+        btn("Left-handed layout: " + if (prof.leftHand) "ON" else "OFF") { prof.leftHand = !prof.leftHand; commit() }
+        btn("Zoom buttons (+ / −): " + if (prof.zoomBtns) "ON" else "OFF") { prof.zoomBtns = !prof.zoomBtns; commit() }
+        btn("Reset to defaults") {
+            prof.ctrlScale = 100; prof.ctrlOp = 1; prof.hudScale = 100; prof.leftHand = false; prof.zoomBtns = true; commit()
+        }
+        btn("Back", Ui.ACCENT) { showMenu() }
     }
 
     // ------------------------------------------------------------ menu
@@ -280,6 +304,7 @@ class GameActivity : Activity(), GameHost {
         btn("Store") { showShop() }
         btn("Sound effects: " + if (prof.sound) "ON" else "OFF") { prof.sound = !prof.sound; prof.save(); showMenu() }
         btn("Music: " + if (prof.music) "ON" else "OFF") { prof.music = !prof.music; prof.save(); sfx.applyMusicSetting(); showMenu() }
+        btn("Display & Controls…") { showDisplay() }
         btn("FPS limit: " + when (prof.fpsLimit) { 0 -> "Max"; else -> prof.fpsLimit.toString() }) {
             prof.fpsLimit = when (prof.fpsLimit) { 30 -> 60; 60 -> 0; else -> 30 }; prof.save(); showMenu()
         }

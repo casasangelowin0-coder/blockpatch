@@ -20,6 +20,10 @@ object Id {
     const val WORLD_LOCK = 15
     const val DIAMOND_LOCK = 16
     const val BLUE_LOCK = 17
+    const val SMALL_LOCK = 56     // locks up to 10 tiles
+    const val BIG_LOCK = 57       // locks up to 48 tiles
+    const val HUGE_LOCK = 58      // locks up to 200 tiles
+    const val BUILDER_LOCK = 59   // locks up to 200 tiles, owner chooses what others may do
     const val WINGS_ANGEL = 32
     const val WINGS_DEMON = 33
     const val TOP_HAT = 34
@@ -29,6 +33,30 @@ object Id {
     const val PICKAXE = 38
     const val FIST = 39
     const val SEED = 1000   // seed id = SEED + block id
+
+    // Filipino blocks (block id == atlas tile index, must stay < 64)
+    const val BAMBOO = 22       // Kawayan
+    const val NIPA = 23         // Pawid / nipa thatch
+    const val BANIG = 24        // woven mat
+    const val CAPIZ = 25        // capiz shell window
+    const val NARRA = 26        // national tree
+    const val ADOBE = 27        // Intramuros stone
+    const val PAROL = 28        // Christmas star lantern
+    const val JEEPNEY = 29      // jeepney panel
+    const val SAMPAGUITA = 30   // national flower
+    const val TERRACE = 31      // Banaue rice terrace
+    const val MANGO = 40
+    const val COCONUT = 41      // Niyog
+    const val BANANA = 42       // Saging
+    const val CALAMANSI = 43
+    const val UBE = 44
+    const val PALAY = 45        // rice
+    const val LANGKA = 46       // jackfruit
+    const val PINEAPPLE = 47    // Pinya
+    const val SUGARCANE = 52    // Tubo
+    const val PAPAYA = 53
+    const val PILI = 54
+    const val KAMOTE = 55       // sweet potato
 
     // atlas-only sprites
     const val T_CAVE_BG = 18
@@ -53,6 +81,39 @@ class Item(
     @JvmField val slot: Slot? = null,
     @JvmField val desc: String = "",
     @JvmField val placeable: Boolean = false
+)
+
+/** A Filipino-themed block + its seed. price = gems for a 3-seed pack in the shop. */
+class Pinoy(
+    val id: Int, val name: String, val hits: Int, val solid: Boolean, val clear: Boolean,
+    val gMin: Int, val gMax: Int, val grow: Int, val price: Int, val desc: String
+)
+
+val PINOY: List<Pinoy> = listOf(
+    // ---- culture / building
+    Pinoy(Id.BAMBOO, "Bamboo", 3, true, false, 0, 1, 25, 8, "Kawayan: hollow, strong, and grows fast."),
+    Pinoy(Id.NIPA, "Nipa Thatch", 3, true, false, 0, 1, 25, 8, "Pawid roof of the Bahay Kubo."),
+    Pinoy(Id.BANIG, "Banig Mat", 3, true, false, 1, 2, 35, 12, "Hand-woven mat in bright colors."),
+    Pinoy(Id.CAPIZ, "Capiz Window", 4, true, true, 1, 2, 45, 18, "Windows made of translucent capiz shell."),
+    Pinoy(Id.NARRA, "Narra Wood", 5, true, false, 1, 3, 60, 25, "Narra: the national tree of the Philippines."),
+    Pinoy(Id.ADOBE, "Adobe Stone", 6, true, false, 2, 3, 60, 25, "Old Spanish-era walls of Intramuros."),
+    Pinoy(Id.PAROL, "Parol", 2, false, true, 1, 2, 50, 30, "Glowing Christmas star lantern. Walk through it."),
+    Pinoy(Id.JEEPNEY, "Jeepney Panel", 7, true, false, 2, 4, 80, 45, "Shiny, colorful, and always on the road."),
+    Pinoy(Id.SAMPAGUITA, "Sampaguita", 2, false, true, 1, 2, 35, 15, "The national flower. Smells wonderful."),
+    Pinoy(Id.TERRACE, "Rice Terrace", 4, true, false, 1, 3, 55, 22, "Banaue Rice Terraces carved into the mountain."),
+    // ---- crops
+    Pinoy(Id.MANGO, "Mango", 3, true, false, 1, 2, 30, 10, "Sweet Philippine mango."),
+    Pinoy(Id.COCONUT, "Niyog", 3, true, false, 1, 2, 30, 10, "Coconut: the tree of life."),
+    Pinoy(Id.BANANA, "Saging", 3, true, false, 0, 2, 25, 8, "Banana bunch. Plenty of potassium."),
+    Pinoy(Id.CALAMANSI, "Calamansi", 3, true, false, 1, 2, 30, 10, "Small, sour, perfect for sawsawan."),
+    Pinoy(Id.UBE, "Ube", 3, true, false, 1, 3, 40, 14, "Purple yam. Great for halo-halo."),
+    Pinoy(Id.PALAY, "Palay", 3, true, false, 0, 2, 25, 8, "Unhusked rice, the heart of every meal."),
+    Pinoy(Id.LANGKA, "Langka", 4, true, false, 1, 3, 45, 15, "Jackfruit: big, spiky, and sweet inside."),
+    Pinoy(Id.PINEAPPLE, "Pinya", 3, true, false, 1, 3, 40, 14, "Pineapple. Its fiber makes piña cloth."),
+    Pinoy(Id.SUGARCANE, "Tubo", 3, true, false, 0, 2, 30, 9, "Sugarcane stalks."),
+    Pinoy(Id.PAPAYA, "Papaya", 3, true, false, 1, 2, 30, 10, "Orange, soft, and sweet."),
+    Pinoy(Id.PILI, "Pili Nut", 5, true, false, 2, 4, 70, 30, "Rare nut from Bicol."),
+    Pinoy(Id.KAMOTE, "Kamote", 3, true, false, 0, 2, 25, 8, "Sweet potato. Perfect merienda.")
 )
 
 object ItemDB {
@@ -81,8 +142,12 @@ object ItemDB {
         reg(Item(Id.WORLD_LOCK, "World Lock", 15, 0, true, false, 0, 0, 0, desc = "Locks the whole world. Only you can build.", placeable = true))
         reg(Item(Id.DIAMOND_LOCK, "Diamond Lock", 16, 0, true, desc = "Locks a world, or worth 100 World Locks.", placeable = true))
         reg(Item(Id.BLUE_LOCK, "Blue Gem Lock", 17, 0, true, desc = "Locks a world, or worth 100 Diamond Locks.", placeable = true))
-        reg(Item(Id.WINGS_ANGEL, "Angel Wings", 32, slot = Slot.BACK, desc = "Triple jump + hold jump to glide."))
-        reg(Item(Id.WINGS_DEMON, "Demon Wings", 33, slot = Slot.BACK, desc = "Triple jump + hold jump to glide."))
+        reg(Item(Id.SMALL_LOCK, "Small Lock", 56, 0, true, false, 0, 0, 0, desc = "Locks up to 10 tiles. Tap to view it, hold to remove.", placeable = true))
+        reg(Item(Id.BIG_LOCK, "Big Lock", 57, 0, true, false, 0, 0, 0, desc = "Locks up to 48 tiles. Tap to view it, hold to remove.", placeable = true))
+        reg(Item(Id.HUGE_LOCK, "Huge Lock", 58, 0, true, false, 0, 0, 0, desc = "Locks up to 200 tiles. Tap to view it, hold to remove.", placeable = true))
+        reg(Item(Id.BUILDER_LOCK, "Builder's Lock", 59, 0, true, false, 0, 0, 0, desc = "Locks up to 200 tiles. Tap it to choose what others may do: build, punch, both, or nothing.", placeable = true))
+        reg(Item(Id.WINGS_ANGEL, "Angel Wings", 32, slot = Slot.BACK, desc = "Double jump + hold jump to glide."))
+        reg(Item(Id.WINGS_DEMON, "Demon Wings", 33, slot = Slot.BACK, desc = "Double jump + hold jump to glide."))
         reg(Item(Id.TOP_HAT, "Top Hat", 34, slot = Slot.HAT, desc = "Very dapper."))
         reg(Item(Id.CROWN, "Golden Crown", 35, slot = Slot.HAT, desc = "Rule your worlds."))
         reg(Item(Id.SHADES, "Sunglasses", 36, slot = Slot.FACE, desc = "Too cool for school."))
@@ -90,7 +155,8 @@ object ItemDB {
         reg(Item(Id.PICKAXE, "Golden Pickaxe", 38, slot = Slot.HAND, desc = "Punch twice as hard and faster."))
         reg(Item(Id.T_GEM, "Gem", Id.T_GEM))
         reg(Item(Id.FIST, "Fist", 39, desc = "Punch blocks. Tap empty space to place the selected item."))
-        for (b in listOf(Id.DIRT, Id.ROCK, Id.WOOD, Id.BRICK, Id.GLASS, Id.GOLD, Id.SAND)) {
+        for (f in PINOY) reg(Item(f.id, f.name, f.id, f.hits, f.solid, f.clear, f.gMin, f.gMax, f.grow, desc = f.desc, placeable = true))
+        for (b in listOf(Id.DIRT, Id.ROCK, Id.WOOD, Id.BRICK, Id.GLASS, Id.GOLD, Id.SAND) + PINOY.map { it.id }) {
             val base = map[b]!!
             reg(Item(Id.SEED + b, base.name + " Seed", Id.T_SEED, growSec = base.growSec,
                 desc = "Plant on solid ground. Grows in ${base.growSec}s.", placeable = true))
@@ -101,7 +167,10 @@ object ItemDB {
     operator fun get(id: Int): Item = map[id] ?: unknown
     fun isSeed(id: Int) = id >= Id.SEED
     fun blockOfSeed(id: Int) = id - Id.SEED
-    fun isLock(id: Int) = id == Id.WORLD_LOCK || id == Id.DIAMOND_LOCK || id == Id.BLUE_LOCK
+    fun isWorldLock(id: Int) = id == Id.WORLD_LOCK || id == Id.DIAMOND_LOCK || id == Id.BLUE_LOCK
+    fun isAreaLock(id: Int) = id == Id.SMALL_LOCK || id == Id.BIG_LOCK || id == Id.HUGE_LOCK || id == Id.BUILDER_LOCK
+    fun isLock(id: Int) = isWorldLock(id) || isAreaLock(id)
+    fun lockCap(id: Int) = when (id) { Id.SMALL_LOCK -> 10; Id.BIG_LOCK -> 48; Id.HUGE_LOCK, Id.BUILDER_LOCK -> 200; else -> 0 }
     fun isCurrency(id: Int) = id == Id.WORLD_LOCK || id == Id.DIAMOND_LOCK || id == Id.BLUE_LOCK
 }
 
@@ -119,7 +188,14 @@ object Shop {
             Offer(Id.DIRT, 20, 10), Offer(Id.WOOD, 10, 25), Offer(Id.PLATFORM, 5, 15),
             Offer(Id.DOOR, 1, 10), Offer(Id.SIGN, 1, 5)
         ),
-        "Locks" to listOf(Offer(Id.WORLD_LOCK, 1, 100), Offer(Id.WORLD_LOCK, 10, 950)),
+        "Pinoy Seeds" to PINOY.map { Offer(Id.SEED + it.id, 3, it.price) },
+        "Pinoy Blocks" to PINOY.filter { it.solid || it.id == Id.PAROL || it.id == Id.SAMPAGUITA }
+            .map { Offer(it.id, 10, it.price * 3) },
+        "Locks" to listOf(
+            Offer(Id.SMALL_LOCK, 1, 25), Offer(Id.BIG_LOCK, 1, 75), Offer(Id.HUGE_LOCK, 1, 200),
+            Offer(Id.BUILDER_LOCK, 1, 250),
+            Offer(Id.WORLD_LOCK, 1, 100), Offer(Id.WORLD_LOCK, 10, 950)
+        ),
         "Clothes" to listOf(
             Offer(Id.SHADES, 1, 60), Offer(Id.SNEAKERS, 1, 80), Offer(Id.TOP_HAT, 1, 150),
             Offer(Id.PICKAXE, 1, 400), Offer(Id.WINGS_ANGEL, 1, 800), Offer(Id.WINGS_DEMON, 1, 1200),
@@ -130,6 +206,14 @@ object Shop {
         Recipe("Brick ×1  ←  3 Rock", listOf(Id.ROCK to 3), listOf(Id.BRICK to 1)),
         Recipe("Glass ×2  ←  3 Dirt", listOf(Id.DIRT to 3), listOf(Id.GLASS to 2)),
         Recipe("Platform ×2  ←  1 Wood Block", listOf(Id.WOOD to 1), listOf(Id.PLATFORM to 2)),
+        Recipe("Splice: Narra Seed  ←  Wood Seed + Bamboo Seed",
+            listOf(Id.SEED + Id.WOOD to 1, Id.SEED + Id.BAMBOO to 1), listOf(Id.SEED + Id.NARRA to 1)),
+        Recipe("Splice: Adobe Seed  ←  Brick Seed + Sand Seed",
+            listOf(Id.SEED + Id.BRICK to 1, Id.SEED + Id.SAND to 1), listOf(Id.SEED + Id.ADOBE to 1)),
+        Recipe("Splice: Parol Seed  ←  Capiz Seed + Bamboo Seed",
+            listOf(Id.SEED + Id.CAPIZ to 1, Id.SEED + Id.BAMBOO to 1), listOf(Id.SEED + Id.PAROL to 1)),
+        Recipe("Splice: Jeepney Seed  ←  Gold Seed + Rock Seed",
+            listOf(Id.SEED + Id.GOLD to 1, Id.SEED + Id.ROCK to 1), listOf(Id.SEED + Id.JEEPNEY to 1)),
         Recipe("Splice: Gold Seed  ←  Wood Seed + Rock Seed",
             listOf(Id.SEED + Id.WOOD to 1, Id.SEED + Id.ROCK to 1), listOf(Id.SEED + Id.GOLD to 1))
     )
