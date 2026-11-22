@@ -79,8 +79,8 @@ object ItemDB {
         reg(Item(Id.MAIN_DOOR, "Main Door", 13, 0, false, true, desc = "Tap to exit the world."))
         reg(Item(Id.TREE, "Tree", 14, 0, false, true, desc = "A growing tree."))
         reg(Item(Id.WORLD_LOCK, "World Lock", 15, 0, true, false, 0, 0, 0, desc = "Locks the whole world. Only you can build.", placeable = true))
-        reg(Item(Id.DIAMOND_LOCK, "Diamond Lock", 16, desc = "Currency. Worth 100 World Locks."))
-        reg(Item(Id.BLUE_LOCK, "Blue Gem Lock", 17, desc = "Currency. Worth 100 Diamond Locks."))
+        reg(Item(Id.DIAMOND_LOCK, "Diamond Lock", 16, 0, true, desc = "Locks a world, or worth 100 World Locks.", placeable = true))
+        reg(Item(Id.BLUE_LOCK, "Blue Gem Lock", 17, 0, true, desc = "Locks a world, or worth 100 Diamond Locks.", placeable = true))
         reg(Item(Id.WINGS_ANGEL, "Angel Wings", 32, slot = Slot.BACK, desc = "Triple jump + hold jump to glide."))
         reg(Item(Id.WINGS_DEMON, "Demon Wings", 33, slot = Slot.BACK, desc = "Triple jump + hold jump to glide."))
         reg(Item(Id.TOP_HAT, "Top Hat", 34, slot = Slot.HAT, desc = "Very dapper."))
@@ -101,6 +101,7 @@ object ItemDB {
     operator fun get(id: Int): Item = map[id] ?: unknown
     fun isSeed(id: Int) = id >= Id.SEED
     fun blockOfSeed(id: Int) = id - Id.SEED
+    fun isLock(id: Int) = id == Id.WORLD_LOCK || id == Id.DIAMOND_LOCK || id == Id.BLUE_LOCK
     fun isCurrency(id: Int) = id == Id.WORLD_LOCK || id == Id.DIAMOND_LOCK || id == Id.BLUE_LOCK
 }
 
@@ -118,7 +119,7 @@ object Shop {
             Offer(Id.DIRT, 20, 10), Offer(Id.WOOD, 10, 25), Offer(Id.PLATFORM, 5, 15),
             Offer(Id.DOOR, 1, 10), Offer(Id.SIGN, 1, 5)
         ),
-        "Locks" to listOf(Offer(Id.WORLD_LOCK, 1, 100)),
+        "Locks" to listOf(Offer(Id.WORLD_LOCK, 1, 100), Offer(Id.WORLD_LOCK, 10, 950)),
         "Clothes" to listOf(
             Offer(Id.SHADES, 1, 60), Offer(Id.SNEAKERS, 1, 80), Offer(Id.TOP_HAT, 1, 150),
             Offer(Id.PICKAXE, 1, 400), Offer(Id.WINGS_ANGEL, 1, 800), Offer(Id.WINGS_DEMON, 1, 1200),

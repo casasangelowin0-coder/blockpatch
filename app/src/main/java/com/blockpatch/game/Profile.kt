@@ -28,7 +28,7 @@ class Profile(ctx: Context) {
     var sel = Id.FIST
     val inv = SparseIntArray()
     val equip = IntArray(5)
-    val quick = IntArray(4)
+    val quick = IntArray(5)
     val notes = ArrayList<String>()
 
     init { load() }

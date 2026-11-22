@@ -25,8 +25,8 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     SurfaceView(ctx), SurfaceHolder.Callback, Runnable {
 
     companion object {
-        const val PW = 0.6f
-        const val PH = 1.75f
+        const val PW = 0.5f
+        const val PH = 1.45f
         const val GRAV = 42f
         const val JUMP = 14.2f
         const val MAXFALL = 24f
@@ -38,7 +38,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         const val REACH = 4.6f
         const val COYOTE = 0.09f
         const val BUFFER = 0.12f
-        const val ROWS = 12f
+        const val ROWS = 15f
         const val GEM = -1
         const val C_WHITE = 0xFFFFFFFF.toInt()
         const val C_GREEN = 0xFF7CE0A0.toInt()
@@ -158,7 +158,15 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     @Volatile private var insR = 0f
     @Volatile private var insT = 0f
     @Volatile private var insB = 0f
-    private val hotR = Array(5) { RectF() }
+    private val hotR = Array(6) { RectF() }
+    private val tabR = RectF()
+    private val rP = RectF()
+    @Volatile private var drawerOpen = false
+    @Volatile private var dN = 0
+    private val dIds = IntArray(24)
+    private var drawerT = 0f
+    @Volatile private var pbDown = false
+    @Volatile private var pbNew = false
     private val arrowL = Path(); private val arrowR = Path(); private val arrowJ = Path()
     private var gemsStr = ""; private var gemsCache = -1
     private var lvStr = ""; private var lvCache = -1
@@ -187,17 +195,56 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
 
     private fun layoutControls() {
         val w = vw; val h = vh
-        val b = dp(16f); val s = dp(66f); val g = dp(10f)
+        val b = dp(16f); val s = dp(64f); val g = dp(10f)
         val bot = h - b - insB
         rL.set(b + insL, bot - s, b + insL + s, bot)
         rR.set(b + insL + s + g, bot - s, b + insL + s + g + s, bot)
-        val js = dp(80f); rJ.set(w - b - insR - js, bot - js, w - b - insR, bot)
-        val sz = dp(46f); val gap = dp(6f); val total = sz * 5 + gap * 4
-        val sx = (w - total) / 2f; val sy = h - dp(10f) - insB - sz
-        for (i in 0 until 5) hotR[i].set(sx + i * (sz + gap), sy, sx + i * (sz + gap) + sz, sy + sz)
+        val js = dp(76f)
+        rP.set(w - b - insR - js, bot - js, w - b - insR, bot)
+        rJ.set(rP.left - g - js, bot - js, rP.left - g, bot)
+        val sz = dp(46f); val gap = dp(6f); val total = sz * 6 + gap * 5
+        val sx = (w - total) / 2f; val sy = h - dp(8f) - insB - sz
+        for (i in 0 until 6) hotR[i].set(sx + i * (sz + gap), sy, sx + i * (sz + gap) + sz, sy + sz)
+        tabR.set(w / 2f - dp(34f), sy - dp(22f), w / 2f + dp(34f), sy - dp(2f))
         arrow(arrowL, rL, -1); arrow(arrowR, rR, 1)
         val cx = rJ.centerX(); val cy = rJ.centerY(); val r = rJ.width() * 0.22f
         arrowJ.reset(); arrowJ.moveTo(cx, cy - r); arrowJ.lineTo(cx + r, cy + r * 0.7f); arrowJ.lineTo(cx - r, cy + r * 0.7f); arrowJ.close()
+    }
+
+    /** Geometry of the docked backpack drawer; pure function of screen size + item count (any thread). */
+    private fun drawerGeom(out: RectF): Float {
+        val cell = dp(46f); val cols = 8; val pad = dp(8f)
+        val n = max(1, dN); val rows = min(3, (n + cols - 1) / cols)
+        val wPx = cols * cell + pad * 2; val hPx = rows * cell + pad * 2
+        out.set(vw / 2f - wPx / 2, tabR.top - hPx - dp(4f), vw / 2f + wPx / 2, tabR.top - dp(4f))
+        return cell
+    }
+
+    private fun refreshDrawer() {
+        var n = 0
+        dIds[n++] = Id.FIST
+        for ((id, _) in prof.allItems()) { if (id != Id.FIST && n < dIds.size) dIds[n++] = id }
+        dN = n
+    }
+
+    private fun toggleDrawer() { drawerOpen = !drawerOpen; if (drawerOpen) refreshDrawer(); sfx.play("equip", 0.4f) }
+
+    private fun drawerTap(x: Float, y: Float) {
+        val r = RectF(); val cell = drawerGeom(r)
+        if (!r.contains(x, y)) return
+        val pad = dp(8f)
+        val col = ((x - r.left - pad) / cell).toInt(); val row = ((y - r.top - pad) / cell).toInt()
+        if (col !in 0..7 || row < 0) return
+        val idx = row * 8 + col
+        if (idx >= dN) return
+        val id = dIds[idx]; val it = ItemDB[id]
+        if (it.slot != null) {
+            val on = prof.toggleEquip(id); sfx.play("equip")
+            con(if (on) "Equipped ${it.name}" else "Removed ${it.name}", C_GREEN)
+        } else if (it.placeable || id == Id.FIST) {
+            prof.select(id); sfx.play("equip", 0.6f); toast(it.name, C_WHITE); drawerOpen = false
+        } else toast(it.name + ": " + it.desc, C_BLUE)
+        refreshDrawer()
     }
 
     private fun arrow(p: Path, r: RectF, d: Int) {
@@ -289,9 +336,12 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
             rL.contains(x, y) -> role[id] = 1
             rR.contains(x, y) -> role[id] = 2
             rJ.contains(x, y) -> { role[id] = 3; jumpReq = true }
+            rP.contains(x, y) -> { role[id] = 6; pbNew = true }
+            tabR.contains(x, y) -> { role[id] = 5; queue { toggleDrawer() } }
+            drawerOpen && RectF().also { drawerGeom(it) }.contains(x, y) -> { role[id] = 5; val fx = x; val fy = y; queue { drawerTap(fx, fy) } }
             else -> {
                 var hs = -1
-                for (i in 0 until 5) if (hotR[i].contains(x, y)) hs = i
+                for (i in 0 until 6) if (hotR[i].contains(x, y)) hs = i
                 if (hs >= 0) { role[id] = 5; val slot = hs; queue { selectSlot(slot) } }
                 else if (worldPtr < 0) { role[id] = 4; worldPtr = id; wx = x; wy = y; wNew = true; wDown = true }
             }
@@ -307,9 +357,9 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     }
 
     private fun refresh() {
-        var l = false; var r = false; var j = false
-        for (v in role) { if (v == 1) l = true else if (v == 2) r = true else if (v == 3) j = true }
-        holdL = l; holdR = r; jumpHeld = j
+        var l = false; var r = false; var j = false; var p = false
+        for (v in role) { if (v == 1) l = true else if (v == 2) r = true else if (v == 3) j = true else if (v == 6) p = true }
+        holdL = l; holdR = r; jumpHeld = j; pbDown = p
     }
 
     private fun selectSlot(i: Int) {
@@ -433,6 +483,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         saveT += dt
         if (saveT > 6f) { saveT = 0f; if (w.dirty) w.save(context); prof.save() }
         uiT += dt
+        if (drawerOpen) { drawerT += dt; if (drawerT > 0.3f) { drawerT = 0f; refreshDrawer() } }
         if (uiDirty && uiT > 0.25f) { uiT = 0f; uiDirty = false; host.stateChanged() }
     }
 
@@ -550,7 +601,30 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     private fun inReach(tx: Int, ty: Int): Boolean =
         hypot(tx + 0.5f - (px + PW / 2), ty + 0.5f - (py + PH / 2)) <= REACH
 
+    private fun handlePunchButton(w: World, dt: Float) {
+        val hasItem = prof.sel != Id.FIST && prof.count(prof.sel) > 0 && ItemDB[prof.sel].slot == null
+        val cx = px + PW / 2; val row = floor(py + PH * 0.55f).toInt()
+        val c1 = floor(cx + face * (PW / 2 + 0.35f)).toInt()
+        var tx = c1
+        if (!hasItem && w.get(c1, row) == Id.AIR && w.get(c1 + face, row) != Id.AIR) tx = c1 + face
+        if (pbNew) {
+            pbNew = false; holdTx = tx; holdTy = row; holdT = 0f
+            pressedEmpty = w.get(tx, row) == Id.AIR
+            interact(w, tx, row, true); return
+        }
+        if (tx != holdTx || row != holdTy) {
+            holdTx = tx; holdTy = row; holdT = 0f
+            pressedEmpty = w.get(tx, row) == Id.AIR
+            if (!pressedEmpty) interact(w, tx, row, false)
+        } else {
+            holdT += dt
+            if (!pressedEmpty) interact(w, tx, row, false)
+        }
+    }
+
     private fun handleWorldInput(dt: Float) {
+        val wp = world
+        if (pbDown && wp != null) { handlePunchButton(wp, dt); return }
         if (!wDown) { holdTx = -1; return }
         val tx = floor((wx + camXi) / T).toInt(); val ty = floor((wy + camYi) / T).toInt()
         val w = world ?: return
@@ -591,9 +665,9 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
                 sfx.play("notify", 0.5f); banner(if (t.isEmpty()) "(blank sign)" else t, 3.5f)
             } else if (holdT > 0.7f) punch(w, tx, ty)
             Id.TREE -> if (first) harvest(w, tx, ty)
-            Id.WORLD_LOCK -> if (first) {
+            Id.WORLD_LOCK, Id.DIAMOND_LOCK, Id.BLUE_LOCK -> if (first) {
                 val me = w.ownerId == prof.uid
-                toast(if (me) "Your World Lock. Hold to remove it." else "World Lock owned by ${w.ownerName}.", C_BLUE)
+                toast(if (me) "Your ${ItemDB[id].name}. Hold to remove it." else "${ItemDB[id].name} owned by ${w.ownerName}.", C_BLUE)
             } else if (holdT > 0.8f) punch(w, tx, ty)
             else -> punch(w, tx, ty)
         }
@@ -635,10 +709,10 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
                     }
                 }
             }
-            Id.WORLD_LOCK -> {
+            Id.WORLD_LOCK, Id.DIAMOND_LOCK, Id.BLUE_LOCK -> {
                 if (w.ownerId != null) return toast("This world is already locked.", C_RED)
-                prof.take(Id.WORLD_LOCK, 1)
-                w.set(tx, ty, Id.WORLD_LOCK)
+                prof.take(sel, 1)
+                w.set(tx, ty, sel)
                 w.ownerId = prof.uid; w.ownerName = prof.name; w.lockX = tx; w.lockY = ty
                 sfx.play("lock"); banner("World Locked! Only you can build here.", 3f)
                 con("[WORLD LOCKED] by ${prof.name}", C_BLUE)
@@ -675,7 +749,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         if (punchCd > 0f) return
         val id = w.get(tx, ty); if (id == Id.AIR) return
         if (!inReach(tx, ty)) return toast("Too far away.")
-        if (id == Id.WORLD_LOCK) {
+        if (ItemDB.isLock(id)) {
             if (w.ownerId == prof.uid) {
                 punchCd = 0.5f
                 host.confirm("Remove World Lock", "Unlock ${w.name.uppercase()}? Anyone will be able to build here.") { queue { unlockWorld(w) } }
@@ -719,9 +793,10 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
 
     private fun unlockWorld(w: World) {
         if (w !== world || w.ownerId != prof.uid) return
-        if (w.get(w.lockX, w.lockY) == Id.WORLD_LOCK) w.set(w.lockX, w.lockY, Id.AIR)
+        val lid = w.get(w.lockX, w.lockY)
+        if (ItemDB.isLock(lid)) w.set(w.lockX, w.lockY, Id.AIR)
         w.ownerId = null; w.ownerName = ""; w.lockX = -1; w.lockY = -1; w.dirty = true
-        prof.add(Id.WORLD_LOCK, 1)
+        prof.add(if (ItemDB.isLock(lid)) lid else Id.WORLD_LOCK, 1)
         sfx.play("unlock"); banner("World Unlocked", 2f); con("[WORLD UNLOCKED]", C_YELLOW)
         prof.addNote("Unlocked world ${w.name.uppercase()}"); uiDirty = true
     }
@@ -877,7 +952,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
                 drawTile(c, Id.T_CRACK + stage, hitX * T - cxi, hitY * T - cyi, T)
             }
         }
-        if (wDown && holdTx >= 0 && w.inb(holdTx, holdTy)) {
+        if ((wDown || pbDown) && holdTx >= 0 && w.inb(holdTx, holdTy)) {
             line.color = if (inReach(holdTx, holdTy)) 0xDDFFFFFF.toInt() else 0xAAFF5555.toInt()
             line.strokeWidth = dp(2f)
             c.drawRect((holdTx * T - cxi).toFloat(), (holdTy * T - cyi).toFloat(), ((holdTx + 1) * T - cxi).toFloat(), ((holdTy + 1) * T - cyi).toFloat(), line)
@@ -1069,7 +1144,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         rf.set(pad, padT, pad + tw + dp(20f) + lockW, padT + dp(28f))
         fill.color = 0x99000000.toInt(); c.drawRoundRect(rf, dp(8f), dp(8f), fill)
         shadowText(c, title, pad + dp(10f), padT + dp(19f), C_WHITE)
-        if (w.ownerId != null) drawIcon(c, Id.WORLD_LOCK, pad + dp(14f) + tw, padT + dp(6f), dp(16f))
+        if (w.ownerId != null) drawIcon(c, w.get(w.lockX, w.lockY).let { if (ItemDB.isLock(it)) it else Id.WORLD_LOCK }, pad + dp(14f) + tw, padT + dp(6f), dp(16f))
 
         // gems + level
         if (gemsCache != prof.gems) { gemsCache = prof.gems; gemsStr = prof.gems.toString() }
@@ -1118,32 +1193,51 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     }
 
     private fun drawControls(c: Canvas) {
-        // movement + jump
-        for (i in 0..2) {
-            val r = when (i) { 0 -> rL; 1 -> rR; else -> rJ }
-            val on = when (i) { 0 -> holdL; 1 -> holdR; else -> jumpHeld }
-            fill.color = if (on) 0x88FFFFFF.toInt() else 0x44000000
-            if (i == 2) c.drawCircle(r.centerX(), r.centerY(), r.width() / 2, fill) else c.drawRoundRect(r, dp(16f), dp(16f), fill)
+        for (i in 0..3) {
+            val r = when (i) { 0 -> rL; 1 -> rR; 2 -> rJ; else -> rP }
+            val on = when (i) { 0 -> holdL; 1 -> holdR; 2 -> jumpHeld; else -> pbDown }
+            fill.color = if (on) 0x88FFFFFF.toInt() else 0x55000000
+            if (i >= 2) c.drawCircle(r.centerX(), r.centerY(), r.width() / 2, fill) else c.drawRoundRect(r, dp(16f), dp(16f), fill)
+            if (i == 3) { drawIcon(c, Id.FIST, r.centerX() - r.width() * 0.3f, r.centerY() - r.width() * 0.3f, r.width() * 0.6f); continue }
             fill.color = if (on) 0xFF222222.toInt() else 0xBBFFFFFF.toInt()
             c.drawPath(when (i) { 0 -> arrowL; 1 -> arrowR; else -> arrowJ }, fill)
         }
-        // remaining air jumps indicator
         val n = if (onGround) maxAir() else airJumps
         for (i in 0 until maxAir()) {
             fill.color = if (i < n) 0xFFFFD866.toInt() else 0x55FFFFFF
             c.drawCircle(rJ.centerX() + (i - (maxAir() - 1) / 2f) * dp(14f), rJ.top - dp(8f), dp(4.5f), fill)
         }
+        // backpack tab
+        fill.color = if (drawerOpen) 0xFF2F9E6B.toInt() else 0xCC3A6EA5.toInt()
+        rf.set(tabR); c.drawRoundRect(rf, dp(8f), dp(8f), fill)
+        fill.color = 0xFFFFFFFF.toInt()
+        for (k in 0..2) c.drawRect(tabR.centerX() - dp(12f), tabR.top + dp(5f) + k * dp(4.5f), tabR.centerX() + dp(12f), tabR.top + dp(7f) + k * dp(4.5f), fill)
         // hotbar
         textP.textSize = dp(11f); textP.textAlign = Paint.Align.RIGHT
-        for (i in 0 until 5) {
+        for (i in 0 until 6) {
             val id = if (i == 0) Id.FIST else prof.quick[i - 1]
             val r = hotR[i]
-            fill.color = 0x88000000.toInt(); c.drawRoundRect(r, dp(8f), dp(8f), fill)
+            fill.color = 0xAA1B1F26.toInt(); c.drawRoundRect(r, dp(8f), dp(8f), fill)
             if (id != 0) {
                 drawIcon(c, id, r.left + dp(7f), r.top + dp(7f), r.width() - dp(14f))
                 if (id != Id.FIST) shadowText(c, prof.count(id).toString(), r.right - dp(4f), r.bottom - dp(4f), C_WHITE)
             }
             if (id == prof.sel && id != 0) { line.color = 0xFFFFD866.toInt(); line.strokeWidth = dp(2.5f); c.drawRoundRect(r, dp(8f), dp(8f), line) }
+        }
+        // docked backpack drawer
+        if (drawerOpen) {
+            val cell = drawerGeom(rf)
+            fill.color = 0xE61B1F26.toInt(); c.drawRoundRect(rf, dp(12f), dp(12f), fill)
+            val pad = dp(8f)
+            for (k in 0 until min(dN, 24)) {
+                val id = dIds[k]
+                val l = rf.left + pad + (k % 8) * cell; val t = rf.top + pad + (k / 8) * cell
+                fill.color = 0xFF323A47.toInt(); c.drawRoundRect(l + dp(2f), t + dp(2f), l + cell - dp(2f), t + cell - dp(2f), dp(8f), dp(8f), fill)
+                drawIcon(c, id, l + dp(8f), t + dp(8f), cell - dp(16f))
+                if (id != Id.FIST && prof.count(id) > 1) shadowText(c, prof.count(id).toString(), l + cell - dp(5f), t + cell - dp(5f), C_WHITE)
+                val eq = prof.isEquipped(id)
+                if (eq || id == prof.sel) { line.color = if (eq) 0xFFE8C23A.toInt() else 0xFF2F9E6B.toInt(); line.strokeWidth = dp(2f); c.drawRoundRect(l + dp(2f), t + dp(2f), l + cell - dp(2f), t + cell - dp(2f), dp(8f), dp(8f), line) }
+            }
         }
         textP.textAlign = Paint.Align.LEFT
     }
