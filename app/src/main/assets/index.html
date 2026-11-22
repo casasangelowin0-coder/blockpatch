@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Blockpatch</title>
+<style>
+:root{--bg:#f3efe6;--fg:#23262b;--pn:#fffdf8;--ac:#2f7d5b;--bd:#cfc8b8;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#15181d;--fg:#e8e6df;--pn:#1f242b;--ac:#58c08f;--bd:#363d47}}
+*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,sans-serif;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+.ov{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:16px;z-index:5;background:var(--bg)}
+.ov.dim{background:rgba(0,0,0,.45)}
+.ov>div{background:var(--pn);border:1px solid var(--bd);border-radius:14px;padding:18px;max-width:380px;width:100%;max-height:90vh;overflow:auto}
+h1{margin:0 0 4px;font:700 28px Georgia,serif}h2{margin:12px 0 6px;font:700 15px Georgia,serif}p{margin:6px 0 12px;font-size:14px;opacity:.8}
+input{width:100%;padding:11px;border-radius:10px;border:1px solid var(--bd);background:var(--bg);color:var(--fg);font:inherit;margin-bottom:8px;user-select:text;-webkit-user-select:text}
+button{font:inherit;color:var(--fg);background:var(--pn);border:1px solid var(--bd);border-radius:10px;padding:9px 12px}
+.pb button,#pb button{display:block;width:100%;margin-bottom:6px;text-align:left}
+#go,#mok{background:var(--ac);color:#fff;border:0;font-weight:600;width:100%;text-align:center!important}
+#sw{display:flex;gap:8px;margin-bottom:10px}#sw button{width:36px;height:36px;border-radius:50%;padding:0;width:36px!important;margin:0!important}
+#sw button.on{outline:3px solid var(--fg)}
+#app{position:fixed;inset:0}canvas{display:block;width:100%;height:100%}
+#top{position:fixed;top:calc(env(safe-area-inset-top,0px) + 6px);left:6px;right:6px;display:flex;gap:6px;justify-content:space-between;pointer-events:none;font-size:13px;align-items:flex-start}
+#top span,#top button{background:var(--pn);border:1px solid var(--bd);border-radius:8px;padding:4px 8px;pointer-events:auto;width:auto}
+.rt{display:flex;gap:6px;align-items:center}
+#ch{position:fixed;top:calc(env(safe-area-inset-top,0px) + 42px);left:6px;font-size:13px;pointer-events:none;max-width:60%}
+#ch div{background:rgba(0,0,0,.55);color:#fff;border-radius:6px;padding:2px 7px;margin-bottom:3px;width:fit-content}
+#ts{position:fixed;left:50%;top:30%;transform:translateX(-50%);background:rgba(0,0,0,.7);color:#fff;border-radius:10px;padding:8px 14px;z-index:4;pointer-events:none;max-width:80%;text-align:center}
+#bar{position:fixed;left:0;right:0;bottom:0;padding:6px 6px calc(env(safe-area-inset-bottom,0px) + 6px);display:flex;flex-direction:column;gap:6px}
+#hot{display:flex;gap:5px;justify-content:center;flex-wrap:wrap}
+#hot button{width:46px;height:46px;padding:0;position:relative}
+#hot button.on{outline:3px solid var(--ac)}
+#hot i{display:block;width:24px;height:24px;margin:auto;border-radius:4px}
+#hot b{position:absolute;right:3px;bottom:1px;font-size:11px}
+#pad{display:flex;justify-content:space-between}
+#pad button{width:74px;height:56px;font-size:22px;opacity:.9;padding:0}
+.g{display:flex;gap:8px}
+</style></head><body>
+<div id="menu" class="ov"><div>
+<h1>Blockpatch</h1>
+<p>Farm, build, trade gems and lock your world. Works offline. Same world name as a friend = build together online.</p>
+<input id="nn" placeholder="Your nickname" maxlength="10" aria-label="Nickname">
+<div id="sw"></div>
+<input id="wn" value="home" maxlength="20" autocapitalize="off" aria-label="World name">
+<button id="go">Enter world</button>
+</div></div>
+<div id="md" class="ov dim" hidden><div><p id="ml"></p><input id="mi" maxlength="80"><button id="mok">OK</button><button id="mx" style="margin-top:6px;width:100%">Cancel</button></div></div>
+<div id="pn" class="ov dim" hidden><div id="pb"></div></div>
+<div id="app" hidden><canvas id="c"></canvas>
+<div id="top"><span id="info"></span><div class="rt"><span id="net">Offline</span><button id="shop" aria-label="Shop and crafting">🛒</button><button id="chat" aria-label="Chat">💬</button></div></div>
+<div id="ch"></div><div id="ts" hidden></div>
+<div id="bar"><div id="hot"></div>
+<div id="pad"><div class="g"><button id="L" aria-label="Move left">◀</button><button id="R" aria-label="Move right">▶</button></div><button id="J" aria-label="Jump">⤒</button></div></div></div>
+<script>
+(()=>{
+const W=120,H=70,T=36,REACH=6,GROW=25000;
+const COL={1:'#5fa84a',2:'#8a5a35',3:'#7b8088',4:'#b07a45',5:'#b5503c',6:'rgba(150,210,235,.55)',7:'#e8c23a',8:'#2b2b33',9:'#3f8a3a',12:'#5a3a22',13:'#c9a26b',14:'#d4af37'};
+const NM={1:'Grass',2:'Dirt',3:'Stone',4:'Wood',5:'Brick',6:'Glass',7:'Gold',12:'Door',13:'Sign',14:'World Lock'};
+const nm=i=>i>100?NM[i-100]+' Seed':NM[i];
+const PRICE={101:5,102:5,103:8,104:10,105:15,106:12,107:40,12:10,13:5,14:100},SH=[101,102,103,104,105,106,107,12,13,14];
+const R=[{n:'Brick ×1  ← 3 Stone',need:{3:3},give:{5:1}},{n:'Glass ×2  ← 3 Dirt',need:{2:3},give:{6:2}},{n:'Splice: Gold Seed  ← Wood Seed + Stone Seed',need:{104:1,103:1},give:{107:1}}];
+const SW=['#2f7d5b','#d9534f','#4a7fd1','#e0a030','#8e5bc4'];
+const $=id=>document.getElementById(id),rn=n=>Math.floor(Math.random()*n);
+let wname,map,edits,plants,doors,signs,owner,sel=4,P,room=null,peers=[],cam={x:0,y:0},keys={},dirty=0,started=0,askcb=null,logs=[];
+let me={id:Math.random().toString(36).slice(2,6),c:SW[0],n:'',inv:{2:10,4:10,6:10,102:3},g:30,q:0,w:'home'};
+try{const s=JSON.parse(localStorage.getItem('bp:me'));if(s&&s.id)me=Object.assign(me,s)}catch(e){}
+const cv=$('c'),cx=cv.getContext('2d');
+function hash(s){let h=2166136261;for(const c of s){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return h>>>0}
+function rd(x,s){let h=Math.imul(x+s,2654435761)>>>0;h^=h>>>15;h=Math.imul(h,2246822519)>>>0;return(h>>>0)/4294967296}
+function gen(n){const s=hash(n)%1000,m=new Uint8Array(W*H);
+ for(let x=0;x<W;x++){const h=30+Math.round(4*Math.sin(x*.11+s)+3*Math.sin(x*.27+s*2)+2*Math.sin(x*.05+s*3));
+  for(let y=h;y<H;y++){m[y*W+x]=y==h?1:y<h+5?2:y==H-1?8:(rd(x*97+y,s)<.03&&y>h+12?7:3)}
+  if(x%7==3&&rd(x,s)<.7&&x>3&&x<W-3){for(let k=1;k<=4;k++)m[(h-k)*W+x]=4;for(let dy=-7;dy<=-5;dy++)for(let dx=-1;dx<=1;dx++)if(!m[(h+dy)*W+x+dx])m[(h+dy)*W+x+dx]=9}}
+ return m}
+const get=(x,y)=>x<0||x>=W||y<0||y>=H?8:map[y*W+x];
+const solid=(x,y)=>{const t=get(x,y);return t&&t!=9&&t!=11&&t!=12&&t!=13};
+const can=()=>!owner||owner==me.id;
+function save(){try{if(map)localStorage.setItem('bp:'+wname,JSON.stringify({e:edits,pl:plants,d:doors,s:signs,o:owner,p:[P.x,P.y]}));localStorage.setItem('bp:me',JSON.stringify(me))}catch(e){}}
+function surface(x){for(let y=0;y<H;y++)if(solid(x,y))return y;return 0}
+const norm=n=>String(n||'').trim().toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,20)||'home';
+function enter(n){if(map)save();if(room){room.leave().catch(()=>{});room=null}peers=[];
+ wname=norm(n);map=gen(wname);edits={};plants={};doors={};signs={};owner=null;me.w=wname;
+ let sp=null;try{sp=JSON.parse(localStorage.getItem('bp:'+wname))}catch(e){}
+ if(sp){edits=sp.e||{};plants=sp.pl||{};doors=sp.d||{};signs=sp.s||{};owner=sp.o||null;for(const k in edits){const[x,y]=k.split(',').map(Number);map[y*W+x]=edits[k]}}
+ const sx=W>>1;P=sp&&sp.p?{x:sp.p[0],y:sp.p[1],vx:0,vy:0,g:0}:{x:sx+.15,y:surface(sx)-2,vx:0,vy:0,g:0};
+ $('menu').hidden=true;$('app').hidden=false;resize();hot();connect();if(!started){started=1;requestAnimationFrame(loop)}}
+function setTile(x,y,t,rem,m,w){if(x<0||x>=W||y<0||y>=H)return;const k=x+','+y,o=map[y*W+x];
+ if(o==14&&t!=14)owner=null;if(t==14)owner=rem?w:me.id;
+ map[y*W+x]=t;edits[k]=t;delete plants[k];delete doors[k];delete signs[k];
+ if(t==11)plants[k]=m;if(t==12)doors[k]=m;if(t==13)signs[k]=m;
+ if(!rem){dirty=1;if(room)room.emit('edit',{x,y,t,m,w:me.id}).catch(()=>{})}}
+function remote(d){if(!d||!Number.isInteger(d.x)||!Number.isInteger(d.y))return;const t=d.t;if(!(t>=0&&t<=14)||t==8||t==10)return;if(owner&&d.w!==owner)return;
+ let m=d.m;if(t==11){if(!m||!(m.ty>=1&&m.ty<=7)||typeof m.at!='number')return;m={ty:m.ty|0,at:m.at}}else if(t==12||t==13)m=String(m||'').slice(0,80);else m=undefined;
+ setTile(d.x,d.y,t,1,m,typeof d.w=='string'?d.w.slice(0,12):undefined)}
+const add=(i,n)=>{me.inv[i]=(me.inv[i]||0)+n};
+function use(){me.inv[sel]--;if(!me.inv[sel]){delete me.inv[sel];sel=+Object.keys(me.inv).find(k=>me.inv[k]>0)||0}snd(330);hot();dirty=1}
+function act(px,py){const x=Math.floor((px+cam.x)/T),y=Math.floor((py+cam.y)/T),k=x+','+y;
+ if(Math.hypot(x+.5-P.x-.4,y+.5-P.y-.5)>REACH)return toast('Too far away');
+ const t=get(x,y);
+ if(t==12)return enter(doors[k]||'home');
+ if(t==13)return toast(signs[k]||'(blank sign)');
+ if(t==11){const p=plants[k]||{ty:2,at:0},left=GROW-(Date.now()-p.at);if(left>0)return toast('Growing… '+Math.ceil(left/1000)+'s');
+  if(!can())return toast('This world is locked');setTile(x,y,0);me.g+=5+rn(8);add(p.ty,2+rn(2));if(rn(10)<4)add(100+p.ty,1);me.q++;snd(520);return hot()}
+ if(!can())return toast('This world is locked');
+ if(t){if(t==8)return;setTile(x,y,0);me.g+=1+rn(3);if(t<8||t==9){if(rn(10)<6)add(t,1);if(t<8&&rn(10)<3)add(100+t,1)}else add(t,1);snd(200);return hot()}
+ if(!(me.inv[sel]>0))return;
+ if(x+1>P.x&&x<P.x+.8&&y+1>P.y&&y<P.y+1)return;
+ if(sel>100){if(!solid(x,y+1))return toast('Plant on solid ground');setTile(x,y,11,0,{ty:sel-100,at:Date.now()});return use()}
+ if(sel==12)return ask('Door leads to which world?','home',v=>{setTile(x,y,12,0,norm(v));use()});
+ if(sel==13)return ask('Sign text','',v=>{setTile(x,y,13,0,v.slice(0,80));use()});
+ if(sel==14&&owner)return toast('World already locked');
+ if(sel==14)toast('World locked — only you can build');
+ setTile(x,y,sel,0);use()}
+function hot(){const h=$('hot');h.innerHTML='';for(const k of Object.keys(me.inv).map(Number).sort((a,b)=>a-b)){if(!me.inv[k])continue;const b=document.createElement('button');b.className=k==sel?'on':'';b.setAttribute('aria-label',nm(k));
+ const c=COL[k>100?k-100:k];b.innerHTML='<i style="background:'+c+(k>100?';border-radius:50%;border:3px solid #6b4a2b':'')+'"></i><b>'+me.inv[k]+'</b>';b.onclick=()=>{sel=k;hot()};h.appendChild(b)}
+ $('info').textContent=wname+(owner?' 🔒':'')+'  ·  '+me.g+' 💎'}
+function panel(){const o=['<h2>Shop · '+me.g+' 💎</h2>'];
+ for(const i of SH)o.push('<button data-a=b data-i='+i+'>'+nm(i)+(i>100?' ×3':'')+' · '+PRICE[i]+' 💎</button>');
+ o.push('<h2>Craft</h2>');R.forEach((r,j)=>o.push('<button data-a=c data-i='+j+'>'+r.n+'</button>'));
+ o.push('<h2>Quest</h2><button data-a=q>Harvest 5 trees ('+me.q+'/5) · claim 50 💎</button><h2>Warp</h2><input id=wi placeholder="world name" maxlength=20><button data-a=w>Go</button><button data-a=x>Close</button>');
+ $('pb').innerHTML=o.join('');$('pn').hidden=false}
+$('pb').onclick=e=>{const b=e.target.closest('button');if(!b)return;const a=b.dataset.a,i=+b.dataset.i;
+ if(a=='x')return $('pn').hidden=true;
+ if(a=='w'){const v=$('wi').value;$('pn').hidden=true;return enter(v)}
+ if(a=='b'&&me.g>=PRICE[i]){me.g-=PRICE[i];add(i,i>100?3:1);snd(440)}
+ else if(a=='b')toast('Not enough gems');
+ if(a=='c'){const r=R[i];if(Object.keys(r.need).every(k=>(me.inv[k]||0)>=r.need[k])){for(const k in r.need){me.inv[k]-=r.need[k];if(!me.inv[k])delete me.inv[k]}for(const k in r.give)add(k,r.give[k]);snd(600)}else toast('Missing ingredients')}
+ if(a=='q'){if(me.q>=5){me.q-=5;me.g+=50;snd(700)}else toast('Harvest more trees first')}
+ hot();dirty=1;panel()};
+function hit(x,y){for(let i=Math.floor(x);i<=Math.floor(x+.8);i++)for(let j=Math.floor(y);j<=Math.floor(y+.999);j++)if(solid(i,j))return 1;return 0}
+function step(){let d=(keys.R?1:0)-(keys.L?1:0);P.vx=d*.18;P.vy=Math.min(P.vy+.03,.55);
+ if(keys.J&&P.g){P.vy=-.46;P.g=0}
+ P.x+=P.vx;if(hit(P.x,P.y))P.x-=P.vx;P.y+=P.vy;P.g=0;
+ if(hit(P.x,P.y)){P.y-=P.vy;if(P.vy>0)P.g=1;P.vy=0}
+ P.x=Math.max(0,Math.min(W-1,P.x));if(P.y>H+5){P.y=surface(W>>1)-2;P.vy=0}}
+function resize(){const r=devicePixelRatio||1;cv.width=innerWidth*r;cv.height=innerHeight*r;cx.setTransform(r,0,0,r,0,0)}
+function tile(t,x,y){const sx=x*T-cam.x,sy=y*T-cam.y;
+ if(t==11){const p=plants[x+','+y]||{ty:2,at:0},f=Math.min(1,(Date.now()-p.at)/GROW);cx.fillStyle='#6b4a2b';cx.fillRect(sx+T/2-2,sy+T-8-f*20,4,8+f*20);cx.fillStyle=f<1?'#7bc96a':COL[p.ty];cx.beginPath();cx.arc(sx+T/2,sy+T-10-f*20,5+f*9,0,7);cx.fill();return}
+ if(t==12){cx.fillStyle=COL[12];cx.fillRect(sx+5,sy+2,T-10,T-2);cx.fillStyle='#e8c23a';cx.fillRect(sx+T-14,sy+T/2,4,4);return}
+ if(t==13){cx.fillStyle='#6b4a2b';cx.fillRect(sx+T/2-2,sy+14,4,T-14);cx.fillStyle=COL[13];cx.fillRect(sx+4,sy+4,T-8,16);return}
+ cx.fillStyle=COL[t];cx.fillRect(sx,sy,T,T);cx.strokeStyle='rgba(0,0,0,.18)';cx.strokeRect(sx+.5,sy+.5,T-1,T-1);
+ if(t==14){cx.fillStyle='#000';cx.fillText('🔒',sx+T/2,sy+T/2+5)}}
+function draw(){const w=innerWidth,h=innerHeight;
+ const g=cx.createLinearGradient(0,0,0,h);g.addColorStop(0,'#8fc9e8');g.addColorStop(1,'#d9efe9');cx.fillStyle=g;cx.fillRect(0,0,w,h);
+ cam.x=Math.max(0,Math.min(W*T-w,P.x*T-w/2));cam.y=Math.max(0,Math.min(H*T-h,P.y*T-h/2));
+ cx.font='16px system-ui';cx.textAlign='center';
+ const x0=Math.floor(cam.x/T),y0=Math.floor(cam.y/T);
+ for(let y=y0;y<=y0+h/T+1;y++)for(let x=x0;x<=x0+w/T+1;x++){const t=get(x,y);if(t)tile(t,x,y)}
+ for(const p of peers){const q=p.presence||{};if(typeof q.x!='number'||typeof q.y!='number')continue;person(q.x,q.y,/^#[0-9a-f]{6}$/i.test(q.c)?q.c:'#e0803a',String(q.n||'').slice(0,10))}
+ person(P.x,P.y,me.c,me.n||'you');
+ const now=Date.now();logs=logs.filter(l=>now-l.t<9000);const ch=$('ch');if(ch.dataset.n!=logs.length+''+(logs[0]?logs[0].t:'')){ch.dataset.n=logs.length+''+(logs[0]?logs[0].t:'');ch.innerHTML='';for(const l of logs){const d=document.createElement('div');d.textContent=l.n+': '+l.s;ch.appendChild(d)}}}
+function person(x,y,c,l){const sx=x*T-cam.x,sy=y*T-cam.y;cx.fillStyle=c;cx.fillRect(sx,sy+10,T*.8,T-10);cx.fillStyle='#f5d3a8';cx.fillRect(sx+2,sy,T*.8-4,12);cx.fillStyle='#000';cx.fillRect(sx+T*.4,sy+4,3,3);cx.font='11px system-ui';cx.fillStyle='#000';cx.fillText(l,sx+T*.4,sy-4)}
+let last=0,acc=0,sv=0,pt=0,ac;
+function snd(f){try{ac=ac||new(window.AudioContext||webkitAudioContext)();const o=ac.createOscillator(),g=ac.createGain();o.frequency.value=f;g.gain.value=.05;o.connect(g);g.connect(ac.destination);o.start();o.stop(ac.currentTime+.07)}catch(e){}}
+function toast(s){const t=$('ts');t.textContent=s;t.hidden=false;clearTimeout(toast.h);toast.h=setTimeout(()=>t.hidden=true,1600)}
+function ask(l,d,cb){$('ml').textContent=l;$('mi').value=d;$('md').hidden=false;$('mi').focus();askcb=cb}
+function say(s){s=s.trim().slice(0,80);if(!s)return;logs.push({n:me.n||me.id,s,t:Date.now()});if(room)room.emit('chat',{n:me.n||me.id,s}).catch(()=>{})}
+function loop(t){const dt=Math.min(50,t-last);last=t;acc+=dt;while(acc>=16){step();acc-=16}draw();
+ if(room&&t-pt>100){pt=t;room.presence({x:+P.x.toFixed(2),y:+P.y.toFixed(2),n:me.n||me.id,c:me.c}).catch(()=>{})}
+ if(dirty&&t-sv>1500){sv=t;dirty=0;save()}requestAnimationFrame(loop)}
+async function connect(){const net=$('net');net.textContent='Offline';
+ try{const c=window.claude;if(!c||!c.use)return;const r=await c.use('room');if(!r)return;const rm=await r.join('w-'+wname);room=rm;
+  const n=()=>{peers=rm.peers().filter(p=>!p.isMe);net.textContent=peers.length?'Online · '+(peers.length+1)+' players':'Online · just you'};
+  rm.onPeers(n);n();
+  rm.on('edit',m=>{if(!m.isMe)remote(m.data)});
+  rm.on('chat',m=>{if(!m.isMe&&m.data&&typeof m.data.s=='string')logs.push({n:String(m.data.n||'?').slice(0,10),s:m.data.s.slice(0,80),t:Date.now()})});
+  rm.on('need',m=>{if(m.isMe)return;const ks=Object.keys(edits);for(let i=0;i<ks.length;i+=25){const e={},p={},d={},s={};for(const k of ks.slice(i,i+25)){e[k]=edits[k];if(plants[k])p[k]=plants[k];if(doors[k])d[k]=doors[k];if(signs[k])s[k]=signs[k]}setTimeout(()=>room===rm&&rm.emit('sync',{e,p,d,s,o:owner}).catch(()=>{}),i*8)}});
+  rm.on('sync',m=>{const D=m.data;if(m.isMe||!D||typeof D.e!='object'||!D.e)return;const o=typeof D.o=='string'?D.o.slice(0,12):null;if(!owner&&o)owner=o;
+   for(const k in D.e){const[x,y]=k.split(',').map(Number);remote({x,y,t:D.e[k],m:(D.p||{})[k]||(D.d||{})[k]||(D.s||{})[k],w:o||owner})}hot()});
+  setTimeout(()=>room===rm&&rm.emit('need',1).catch(()=>{}),1200);
+ }catch(e){room=null;net.textContent='Offline'}}
+cv.addEventListener('pointerdown',e=>act(e.clientX,e.clientY));
+for(const k of['L','R','J']){const b=$(k),on=v=>e=>{e.preventDefault();keys[k]=v};b.addEventListener('pointerdown',on(1));b.addEventListener('pointerup',on(0));b.addEventListener('pointerleave',on(0));b.addEventListener('pointercancel',on(0))}
+const KM={ArrowLeft:'L',a:'L',ArrowRight:'R',d:'R',ArrowUp:'J',w:'J',' ':'J'};
+addEventListener('keydown',e=>{if(e.target.tagName=='INPUT'){if(e.key=='Enter'&&e.target.id=='mi')$('mok').click();return}const m=KM[e.key];if(m)keys[m]=1;if(e.key=='e')panel();if(e.key=='t'||e.key=='Enter'){e.preventDefault();ask('Say something','',say)}});
+addEventListener('keyup',e=>{const m=KM[e.key];if(m)keys[m]=0});
+addEventListener('resize',resize);addEventListener('pagehide',save);
+$('shop').onclick=panel;$('chat').onclick=()=>ask('Say something','',say);
+$('mok').onclick=()=>{$('md').hidden=true;const c=askcb;askcb=null;c&&c($('mi').value)};$('mx').onclick=()=>{$('md').hidden=true;askcb=null};
+const sw=$('sw');SW.forEach(c=>{const b=document.createElement('button');b.style.background=c;b.setAttribute('aria-label','Colour '+c);b.className=c==me.c?'on':'';b.onclick=()=>{me.c=c;[...sw.children].forEach(x=>x.className=x==b?'on':'')};sw.appendChild(b)});
+$('nn').value=me.n;$('wn').value=me.w||'home';
+$('go').onclick=()=>{me.n=$('nn').value.trim().slice(0,10);enter($('wn').value)};
+})();
+</script></body></html>
