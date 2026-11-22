@@ -1,7 +1,6 @@
-Build the APK
-1. Android Studio -> Open -> select this folder, let Gradle sync.
-2. Build > Build APK(s)  (debug APK lands in app/build/outputs/apk/debug/).
-   Or in a terminal with Gradle 8.7+: gradle assembleDebug
-3. Install: adb install app/build/outputs/apk/debug/app-debug.apk
-Game files live in app/src/main/assets/index.html - replace it to update the game.
-Online co-op needs your own backend (see connect() in index.html); the app is offline-only otherwise.
+Blockpatch (native Android, Kotlin)
+Build: Android Studio -> Open this folder -> Build > Build APK(s), or `gradle assembleDebug` (Gradle 8.7+, JDK 17).
+Install: adb install app/build/outputs/apk/debug/app-debug.apk
+Assets: app/src/main/assets/img/tiles.png (16px sprite atlas), assets/snd/*.wav (effects + music loop).
+Worlds are saved in the app's private storage; player data in SharedPreferences.
+Online co-op is not included (needs your own server); chat, worlds and notifications work offline.
