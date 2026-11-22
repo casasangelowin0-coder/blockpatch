@@ -71,7 +71,7 @@ object ItemDB {
         reg(Item(Id.GLASS, "Glass", 5, 4, true, true, 1, 2, 45, desc = "See-through block.", placeable = true))
         reg(Item(Id.GOLD, "Gold Block", 6, 8, true, false, 4, 8, 90, desc = "Shiny and valuable.", placeable = true))
         reg(Item(Id.SAND, "Sand", 7, 3, true, false, 0, 1, 20, desc = "Soft beach sand.", placeable = true))
-        reg(Item(Id.LAVA, "Lava", 8, 3, false, false, 0, 0, 0, desc = "Deadly! Respawn at the main door."))
+        reg(Item(Id.LAVA, "Lava", 8, 3, false, false, 0, 0, 0, desc = "Burns! Hold jump to climb out, or you respawn at the main door."))
         reg(Item(Id.BEDROCK, "Bedrock", 9, 0, true, desc = "Unbreakable."))
         reg(Item(Id.PLATFORM, "Platform", 10, 2, false, true, 0, 1, 0, desc = "Jump through it from below.", placeable = true))
         reg(Item(Id.DOOR, "Door", 11, 3, false, true, 0, 0, 0, desc = "Links to another world. Tap to enter, hold to remove.", placeable = true))

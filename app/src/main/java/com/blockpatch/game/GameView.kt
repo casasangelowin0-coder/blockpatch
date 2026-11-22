@@ -25,8 +25,12 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     SurfaceView(ctx), SurfaceHolder.Callback, Runnable {
 
     companion object {
-        const val PW = 0.5f
-        const val PH = 1.45f
+        const val PW = 0.5f       // hitbox width  (fits 1-block wide gaps)
+        const val PH = 0.95f      // hitbox height (fits 1-block high tunnels, like Growtopia)
+        const val SPR_H = 1.3f    // drawn sprite height in tiles (taller than the hitbox)
+        const val ZMIN = 0.5f
+        const val ZMAX = 2.5f
+        const val BURN_MAX = 2.0f // seconds in lava before you actually die
         const val GRAV = 42f
         const val JUMP = 14.2f
         const val MAXFALL = 24f
@@ -69,6 +73,15 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     private var vw = 0
     private var vh = 0
     private var T = 48
+    private var baseT = 48
+    private var zoom = 1f
+    @Volatile private var zoomReq = 1f
+    private var burn = 0f
+    private var inLava = false
+    private var lavaMsgT = 0f
+    // pinch zoom (UI thread)
+    private var pinchA = -1; private var pinchB = -1
+    private var pinchDist0 = 1f; private var pinchZoom0 = 1f
     private var camX = 0f
     private var camY = 0f
     @Volatile private var camXi = 0
@@ -160,6 +173,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     @Volatile private var insB = 0f
     private val hotR = Array(6) { RectF() }
     private val tabR = RectF()
+    private val rZi = RectF(); private val rZo = RectF()
     private val rP = RectF()
     @Volatile private var drawerOpen = false
     @Volatile private var dN = 0
@@ -181,7 +195,8 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
 
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
         vw = w; vh = h
-        T = max(24, (h / ROWS).roundToInt())
+        baseT = max(24, (h / ROWS).roundToInt())
+        T = max(12, (baseT * zoom).roundToInt())
         skyPaint.shader = LinearGradient(0f, 0f, 0f, h.toFloat(), 0xFF7FC1E8.toInt(), 0xFFDDF1EA.toInt(), Shader.TileMode.CLAMP)
         layoutControls()
         camSnap = true
@@ -207,6 +222,9 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         for (i in 0 until 6) hotR[i].set(sx + i * (sz + gap), sy, sx + i * (sz + gap) + sz, sy + sz)
         tabR.set(w / 2f - dp(34f), sy - dp(22f), w / 2f + dp(34f), sy - dp(2f))
         arrow(arrowL, rL, -1); arrow(arrowR, rR, 1)
+        val zs = dp(40f); val zt = dp(64f) + insT
+        rZi.set(w - dp(8f) - insR - zs, zt, w - dp(8f) - insR, zt + zs)
+        rZo.set(rZi.left, zt + zs + dp(6f), rZi.right, zt + zs * 2 + dp(6f))
         val cx = rJ.centerX(); val cy = rJ.centerY(); val r = rJ.width() * 0.22f
         arrowJ.reset(); arrowJ.moveTo(cx, cy - r); arrowJ.lineTo(cx + r, cy + r * 0.7f); arrowJ.lineTo(cx - r, cy + r * 0.7f); arrowJ.close()
     }
@@ -315,7 +333,16 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 val i = e.actionIndex; down(e.getPointerId(i), e.getX(i), e.getY(i))
             }
-            MotionEvent.ACTION_MOVE -> for (i in 0 until e.pointerCount) {
+            MotionEvent.ACTION_MOVE -> {
+                if (pinchA >= 0 && pinchB >= 0) {
+                    val ia = e.findPointerIndex(pinchA); val ib = e.findPointerIndex(pinchB)
+                    if (ia >= 0 && ib >= 0) {
+                        val d = hypot(e.getX(ia) - e.getX(ib), e.getY(ia) - e.getY(ib))
+                        if (pinchDist0 <= 0f) { pinchDist0 = max(d, 1f); pinchZoom0 = zoomReq }
+                        else zoomReq = (pinchZoom0 * d / pinchDist0).coerceIn(ZMIN, ZMAX)
+                    }
+                }
+                for (i in 0 until e.pointerCount) {
                 val id = e.getPointerId(i); if (id >= role.size) continue
                 val x = e.getX(i); val y = e.getY(i)
                 if (id == worldPtr) { wx = x; wy = y }
@@ -323,9 +350,10 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
                     if (rR.contains(x, y)) role[id] = 2 else if (rL.contains(x, y)) role[id] = 1
                     refresh()
                 }
+                }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> up(e.getPointerId(e.actionIndex))
-            MotionEvent.ACTION_CANCEL -> { for (i in role.indices) role[i] = 0; worldPtr = -1; wDown = false; refresh() }
+            MotionEvent.ACTION_CANCEL -> { for (i in role.indices) role[i] = 0; worldPtr = -1; wDown = false; pinchA = -1; pinchB = -1; refresh() }
         }
         return true
     }
@@ -338,12 +366,20 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
             rJ.contains(x, y) -> { role[id] = 3; jumpReq = true }
             rP.contains(x, y) -> { role[id] = 6; pbNew = true }
             tabR.contains(x, y) -> { role[id] = 5; queue { toggleDrawer() } }
+            rZi.contains(x, y) -> { role[id] = 5; zoomReq = (zoomReq * 1.25f).coerceIn(ZMIN, ZMAX) }
+            rZo.contains(x, y) -> { role[id] = 5; zoomReq = (zoomReq / 1.25f).coerceIn(ZMIN, ZMAX) }
             drawerOpen && RectF().also { drawerGeom(it) }.contains(x, y) -> { role[id] = 5; val fx = x; val fy = y; queue { drawerTap(fx, fy) } }
             else -> {
                 var hs = -1
                 for (i in 0 until 6) if (hotR[i].contains(x, y)) hs = i
                 if (hs >= 0) { role[id] = 5; val slot = hs; queue { selectSlot(slot) } }
                 else if (worldPtr < 0) { role[id] = 4; worldPtr = id; wx = x; wy = y; wNew = true; wDown = true }
+                else if (pinchA < 0) {
+                    // 2nd finger on the world: start pinch-zoom, cancel the punch/place of the 1st finger
+                    role[id] = 7; pinchA = worldPtr; pinchB = id
+                    wDown = false; wNew = false; holdTx = -1
+                    pinchDist0 = 0f; pinchZoom0 = zoomReq   // distance is captured on the first MOVE
+                }
             }
         }
         refresh()
@@ -351,6 +387,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
 
     private fun up(id: Int) {
         if (id >= role.size) return
+        if (id == pinchA || id == pinchB) { pinchA = -1; pinchB = -1 }
         if (id == worldPtr) { worldPtr = -1; wDown = false }
         role[id] = 0
         refresh()
@@ -449,6 +486,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         val w = world ?: return
         px = w.doorX + 0.5f - PW / 2; py = w.doorY + 1f - PH
         vx = 0f; vy = 0f; onGround = false; airJumps = maxAir(); camSnap = true
+        burn = 0f; inLava = false
     }
 
     private fun maxAir() = if (prof.hasWings) 2 else 1
@@ -456,6 +494,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     // ---------------------------------------------------------------- update
     private fun update(dt: Float) {
         while (true) { val j = jobs.poll() ?: break; j.run() }
+        if (zoomReq != zoom) { zoom = zoomReq; T = max(12, (baseT * zoom).roundToInt()); camSnap = true }
         time += dt
         val w = world ?: return
         for (c in cons) c.t += dt
@@ -490,7 +529,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     private fun updateCamera(dt: Float) {
         val ww = (W * T).toFloat(); val wh = (H * T).toFloat()
         var tx = (px + PW / 2) * T - vw / 2f
-        var ty = (py + PH / 2) * T - vh / 2f - T * 0.4f
+        var ty = (py + PH - SPR_H / 2f) * T - vh / 2f - T * 0.2f
         tx = if (ww <= vw) (ww - vw) / 2f else tx.coerceIn(0f, ww - vw)
         ty = if (wh <= vh) (wh - vh) / 2f else ty.coerceIn(0f, wh - vh)
         if (camSnap) { camX = tx; camY = ty; camSnap = false }
@@ -504,7 +543,8 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
 
     private fun physics(w: World, dt: Float) {
         val dir = (if (holdR) 1 else 0) - (if (holdL) 1 else 0)
-        val speed = if (prof.worn(Slot.FEET) == Id.SNEAKERS) SPEED * 1.15f else SPEED
+        var speed = if (prof.worn(Slot.FEET) == Id.SNEAKERS) SPEED * 1.15f else SPEED
+        if (inLava) speed *= 0.55f
         vx = approach(vx, dir * speed, (if (dir == 0) FRIC else if (onGround) ACC_G else ACC_A) * dt)
         if (dir != 0) face = dir
 
@@ -518,6 +558,11 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         }
 
         vy += GRAV * dt
+        if (inLava) {
+            if (vy > 3.5f) vy = max(3.5f, vy - 60f * dt)       // lava is thick: sink slowly
+            if (jumpHeld) vy = min(vy, -5.5f)                   // hold jump to swim out
+            airJumps = maxAir()
+        }
         val maxFall = if (prof.hasWings && jumpHeld && vy > 0f && !onGround) GLIDE else MAXFALL
         if (vy > maxFall) vy = if (maxFall == GLIDE) max(maxFall, vy - 80f * dt) else maxFall
         lastVy = vy
@@ -562,7 +607,22 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
 
         // --- hazards
         if (py > H + 3f) die("You fell out of the world!")
-        else if (touchesLava(w)) die("Ouch! You touched lava.")
+        else lavaTick(w, dt)
+    }
+
+    /** Growtopia-style lava: it burns you, you have a moment to climb out before you actually die. */
+    private fun lavaTick(w: World, dt: Float) {
+        val now = touchesLava(w)
+        if (now) {
+            if (!inLava) { sfx.play("deny", 0.7f); toast("Ouch! Lava! Hold jump to get out!", C_RED); lavaMsgT = 0f }
+            burn += dt; lavaMsgT -= dt
+            if (lavaMsgT <= 0f) {
+                lavaMsgT = 0.25f
+                addParticle(px + PW / 2, py + PH * 0.5f, (rnd.nextFloat() - 0.5f) * 3f, -1f - rnd.nextFloat() * 2f, 0.5f, 0xFFFF8A30.toInt(), 0.12f)
+            }
+            if (burn >= BURN_MAX) { burn = 0f; inLava = false; die("You burned up in the lava!"); return }
+        } else burn = max(0f, burn - dt * 0.8f)
+        inLava = now
     }
 
     private fun doJump(air: Boolean) {
@@ -961,6 +1021,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         drawDrops(c, cxi, cyi)
         drawPlayer(c, cxi, cyi)
         drawParticles(c, cxi, cyi)
+        if (burn > 0f) { fill.color = Color.argb((90f * (burn / BURN_MAX)).toInt().coerceIn(0, 120), 255, 60, 20); c.drawRect(0f, 0f, vw.toFloat(), vh.toFloat(), fill) }
         drawHud(c, w)
 
         if (fade > 0f) { fill.color = Color.argb((fade * 255).toInt().coerceIn(0, 255), 0, 0, 0); c.drawRect(0f, 0f, vw.toFloat(), vh.toFloat(), fill) }
@@ -1028,7 +1089,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
 
     // ---- player ------------------------------------------------------------
     private fun drawPlayer(c: Canvas, cxi: Int, cyi: Int) {
-        val u = T * PH / 25f
+        val u = T * SPR_H / 25f
         val cx = (px + PW / 2) * T - cxi; val fy = (py + PH) * T - cyi
         val moving = onGround && abs(vx) > 0.5f
         val swing = if (moving) sin(walkT * 2f) * 3f * u else 0f
@@ -1206,6 +1267,15 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         for (i in 0 until maxAir()) {
             fill.color = if (i < n) 0xFFFFD866.toInt() else 0x55FFFFFF
             c.drawCircle(rJ.centerX() + (i - (maxAir() - 1) / 2f) * dp(14f), rJ.top - dp(8f), dp(4.5f), fill)
+        }
+        // zoom buttons
+        for (z in 0..1) {
+            val r = if (z == 0) rZi else rZo
+            fill.color = 0x55000000; c.drawRoundRect(r, dp(10f), dp(10f), fill)
+            fill.color = 0xFFFFFFFF.toInt()
+            val cx0 = r.centerX(); val cy0 = r.centerY(); val a = dp(9f); val t0 = dp(1.8f)
+            c.drawRect(cx0 - a, cy0 - t0, cx0 + a, cy0 + t0, fill)
+            if (z == 0) c.drawRect(cx0 - t0, cy0 - a, cx0 + t0, cy0 + a, fill)
         }
         // backpack tab
         fill.color = if (drawerOpen) 0xFF2F9E6B.toInt() else 0xCC3A6EA5.toInt()
