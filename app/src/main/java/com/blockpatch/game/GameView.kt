@@ -15,6 +15,7 @@ interface GameHost {
     fun confirm(title: String, msg: String, ok: () -> Unit)
     fun exitWorld()
     fun stateChanged()
+    fun openPanel(name: String)
 }
 
 /**
@@ -31,6 +32,10 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         const val ZMIN = 0.5f
         const val ZMAX = 2.5f
         const val BURN_MAX = 2.0f // seconds in lava before you actually die
+        const val PUNCH_CD = 0.32f        // Growtopia-like delay between punches
+        const val PUNCH_CD_PICK = 0.20f   // faster with the golden pickaxe
+        const val PUNCH_ANIM = 0.24f
+        const val FPS = 60
         const val GRAV = 42f
         const val JUMP = 14.2f
         const val MAXFALL = 24f
@@ -81,7 +86,33 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     private var flashT = 0f
     private var inAreaId = 0
     private var inLava = false
+    private var inWater = false
     private var lavaMsgT = 0f
+    // fishing
+    private var fishMode = 0        // 0 idle, 1 waiting, 2 bite
+    private var fishT = 0f
+    private var fishTx = -1
+    private var fishTy = -1
+    // pet
+    private var petX = 0f
+    private var petY = 0f
+    private var petInit = false
+    // daily quest notifications
+    private val qDone = BooleanArray(3)
+    private var qDay = 0L
+    private var qCheckT = 0f
+    // sky cache
+    private var skyKey = -1
+    private var skyH = -1
+    private val skyStops = arrayOf(
+        0.00f to intArrayOf(0xFF7FC1E8.toInt(), 0xFFDDF1EA.toInt()),
+        0.42f to intArrayOf(0xFF6FB7E8.toInt(), 0xFFE8F0E8.toInt()),
+        0.50f to intArrayOf(0xFF3C5AA8.toInt(), 0xFFF2A25C.toInt()),
+        0.56f to intArrayOf(0xFF1B2A55.toInt(), 0xFF6E3A5A.toInt()),
+        0.70f to intArrayOf(0xFF080D1E.toInt(), 0xFF141C36.toInt()),
+        0.90f to intArrayOf(0xFF080D1E.toInt(), 0xFF141C36.toInt()),
+        1.00f to intArrayOf(0xFF7FC1E8.toInt(), 0xFFDDF1EA.toInt())
+    )
     // pinch zoom (UI thread)
     private var pinchA = -1; private var pinchB = -1
     private var pinchDist0 = 1f; private var pinchZoom0 = 1f
@@ -115,6 +146,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     @Volatile private var jumpHeld = false
     @Volatile private var jumpReq = false
     @Volatile private var wDown = false
+    @Volatile private var wTap = false
     @Volatile private var wNew = false
     @Volatile private var wx = 0f
     @Volatile private var wy = 0f
@@ -124,7 +156,16 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     // interaction state
     private var holdTx = -1; private var holdTy = -1; private var holdT = 0f
     private var pressedEmpty = false
+    private var curFirst = false
+    private var bufTx = -1; private var bufTy = -1; private var bufT = 0f      // buffered tap-punch
+    private var pinchActive = false; private var pinchMs = 0L; private var pinchX = 0f; private var pinchY = 0f
+    @Volatile private var tap2 = false
+    @Volatile private var tap2X = 0f
+    @Volatile private var tap2Y = 0f
+    private var guideX = -1; private var guideY = -1; private var guideHold = 0f
     private var hitX = -1; private var hitY = -1; private var hitN = 0; private var lastHit = 0L
+    private var punchDx = 1f; private var punchDy = 0f   // direction of the last punch
+    private var lastBreakTile = -1; private var lastBreakAt = 0L
 
     // effects pools
     private val ppx = FloatArray(MP); private val ppy = FloatArray(MP); private val pvx = FloatArray(MP)
@@ -164,9 +205,6 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     private var saveT = 0f
     private var uiT = 0f
     private var uiDirty = false
-    private var fps = 0
-    private var fpsFrames = 0
-    private var fpsT = 0f
     private var tipStage = 0
 
     // ---------------------------------------------------------------- paints / layout
@@ -345,14 +383,9 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
             try { render(c) } catch (e: Exception) { e.printStackTrace() } finally {
                 try { holder.unlockCanvasAndPost(c) } catch (_: Exception) { }
             }
-            val lim = prof.fpsLimit
-            if (lim > 0) {
-                val target = 1_000_000_000L / lim
-                val spent = System.nanoTime() - t0
-                if (spent < target) try { Thread.sleep((target - spent) / 1_000_000L, ((target - spent) % 1_000_000L).toInt()) } catch (_: InterruptedException) { }
-            }
-            fpsFrames++; fpsT += dt
-            if (fpsT >= 0.5f) { fps = (fpsFrames / fpsT).roundToInt(); fpsFrames = 0; fpsT = 0f }
+            val target = 1_000_000_000L / FPS
+            val spent = System.nanoTime() - t0
+            if (spent < target) try { Thread.sleep((target - spent) / 1_000_000L, ((target - spent) % 1_000_000L).toInt()) } catch (_: InterruptedException) { }
         }
     }
 
@@ -368,7 +401,12 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
                     if (ia >= 0 && ib >= 0) {
                         val d = hypot(e.getX(ia) - e.getX(ib), e.getY(ia) - e.getY(ib))
                         if (pinchDist0 <= 0f) { pinchDist0 = max(d, 1f); pinchZoom0 = zoomReq }
-                        else zoomReq = (pinchZoom0 * d / pinchDist0).coerceIn(ZMIN, ZMAX)
+                        else {
+                            if (!pinchActive && abs(d - pinchDist0) > dp(28f)) {
+                                pinchActive = true; wDown = false; wNew = false; wTap = false; holdTx = -1   // now it's a real pinch
+                            }
+                            if (pinchActive) zoomReq = (pinchZoom0 * d / pinchDist0).coerceIn(ZMIN, ZMAX)
+                        }
                     }
                 }
                 for (i in 0 until e.pointerCount) {
@@ -382,7 +420,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> up(e.getPointerId(e.actionIndex))
-            MotionEvent.ACTION_CANCEL -> { for (i in role.indices) role[i] = 0; worldPtr = -1; wDown = false; pinchA = -1; pinchB = -1; refresh() }
+            MotionEvent.ACTION_CANCEL -> { for (i in role.indices) role[i] = 0; worldPtr = -1; wDown = false; pinchA = -1; pinchB = -1; pinchActive = false; refresh() }
         }
         return true
     }
@@ -390,24 +428,25 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     private fun down(id: Int, x: Float, y: Float) {
         if (id >= role.size) return
         when {
-            nbCount > 0 && x >= nbL && x <= nbR && y >= nbT && y <= nbB -> { role[id] = 5; val yy = y; queue { dismissNote(yy) } }
-            rL.contains(x, y) -> role[id] = 1
-            rR.contains(x, y) -> role[id] = 2
+            nbCount > 0 && x >= nbL && x <= nbR && y >= nbT && y <= nbB -> { role[id] = 5; sfx.play("tap", 0.5f); val yy = y; queue { dismissNote(yy) } }
+            rL.contains(x, y) -> { role[id] = 1; sfx.play("tap", 0.3f) }
+            rR.contains(x, y) -> { role[id] = 2; sfx.play("tap", 0.3f) }
             rJ.contains(x, y) -> { role[id] = 3; jumpReq = true }
             rP.contains(x, y) -> { role[id] = 6; pbNew = true }
             tabR.contains(x, y) -> { role[id] = 5; queue { toggleDrawer() } }
-            rZi.contains(x, y) -> { role[id] = 5; zoomReq = (zoomReq * 1.25f).coerceIn(ZMIN, ZMAX) }
-            rZo.contains(x, y) -> { role[id] = 5; zoomReq = (zoomReq / 1.25f).coerceIn(ZMIN, ZMAX) }
+            rZi.contains(x, y) -> { role[id] = 5; sfx.play("tap", 0.5f); zoomReq = (zoomReq * 1.25f).coerceIn(ZMIN, ZMAX) }
+            rZo.contains(x, y) -> { role[id] = 5; sfx.play("tap", 0.5f); zoomReq = (zoomReq / 1.25f).coerceIn(ZMIN, ZMAX) }
             drawerOpen && RectF().also { drawerGeom(it) }.contains(x, y) -> { role[id] = 5; val fx = x; val fy = y; queue { drawerTap(fx, fy) } }
             else -> {
                 var hs = -1
                 for (i in 0 until 6) if (hotR[i].contains(x, y)) hs = i
                 if (hs >= 0) { role[id] = 5; val slot = hs; queue { selectSlot(slot) } }
-                else if (worldPtr < 0) { role[id] = 4; worldPtr = id; wx = x; wy = y; wNew = true; wDown = true }
+                else if (worldPtr < 0) { role[id] = 4; worldPtr = id; wx = x; wy = y; wNew = true; wDown = true; wTap = true }
                 else if (pinchA < 0) {
-                    // 2nd finger on the world: start pinch-zoom, cancel the punch/place of the 1st finger
+                    // 2nd finger on the world: a pinch only starts once the fingers actually move apart / together.
+                    // A quick tap with the 2nd finger is a normal tap (see up()).
                     role[id] = 7; pinchA = worldPtr; pinchB = id
-                    wDown = false; wNew = false; holdTx = -1
+                    pinchActive = false; pinchMs = System.currentTimeMillis(); pinchX = x; pinchY = y
                     pinchDist0 = 0f; pinchZoom0 = zoomReq   // distance is captured on the first MOVE
                 }
             }
@@ -417,7 +456,8 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
 
     private fun up(id: Int) {
         if (id >= role.size) return
-        if (id == pinchA || id == pinchB) { pinchA = -1; pinchB = -1 }
+        if (id == pinchB && !pinchActive && System.currentTimeMillis() - pinchMs < 260L) { tap2X = pinchX; tap2Y = pinchY; tap2 = true }
+        if (id == pinchA || id == pinchB) { pinchA = -1; pinchB = -1; pinchActive = false }
         if (id == worldPtr) { worldPtr = -1; wDown = false }
         role[id] = 0
         refresh()
@@ -433,7 +473,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         val id = if (i == 0) Id.FIST else prof.quick[i - 1]
         if (i != 0 && id == 0) { host.stateChanged(); return }
         prof.select(id); sfx.play("equip", 0.6f)
-        if (id != Id.FIST) toast(ItemDB[id].name + " ×" + prof.count(id), C_WHITE)
+        if (id != Id.FIST) toast(ItemDB[id].name + "  x" + prof.count(id), C_WHITE)
         else toast("Fist: punch blocks", C_WHITE)
     }
 
@@ -452,6 +492,8 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         lastToast = text; lastToastT = time; con(text, color)
     }
 
+    private fun farAway() { sfx.play("deny", 0.35f, 1.3f); toast("Too far away.") }
+
     private fun banner(text: String, secs: Float = 2.6f) = pushNote(text, "", C_BLUE, 0, secs)
 
     /** Growtopia-style notification box at the top of the screen (game thread). */
@@ -459,6 +501,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         val dup = notifs.firstOrNull { it.title == title && it.text == text }
         if (dup != null) { dup.t = 0f; return }
         notifs.add(Notif(title, text, color, icon, secs))
+        sfx.play("notify", 0.35f)
         while (notifs.size > 3) notifs.removeAt(0)
         if (log) prof.addNote(if (text.isEmpty()) title else "$title: $text")
     }
@@ -481,18 +524,38 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     private fun command(c: String) {
         val parts = c.trim().split(' ', limit = 2); val arg = parts.getOrNull(1)?.trim() ?: ""
         when (parts[0].lowercase()) {
-            "help" -> { con("Commands: /wave /dance /laugh /warp <world> /clear /exit", C_BLUE) }
+            "help" -> { con("Commands: /wave /dance /laugh /warp <world> /time <auto|day|sunset|night> /weather <auto|clear|rain|snow> /badges /quests /stats /pet /fish /clear /exit", C_BLUE) }
             "wave" -> { emote = 1; emoteT = 2.4f; con("${prof.name} waves!", C_GREEN); bubble = "o/"; bubbleT = 2.4f }
-            "dance" -> { emote = 2; emoteT = 3.5f; con("${prof.name} is dancing!", C_GREEN); bubble = "♪"; bubbleT = 3.5f }
+            "dance" -> { emote = 2; emoteT = 3.5f; con("${prof.name} is dancing!", C_GREEN); bubble = "*"; bubbleT = 3.5f }
             "laugh" -> { emote = 3; emoteT = 2.2f; con("${prof.name} laughs.", C_GREEN); bubble = "haha!"; bubbleT = 2.2f }
             "clear" -> cons.clear()
             "exit" -> host.exitWorld()
             "warp" -> if (arg.isEmpty()) con("Usage: /warp <world name>", C_YELLOW) else warp(arg)
+            "badges" -> host.openPanel("badges")
+            "quests" -> host.openPanel("quests")
+            "stats" -> host.openPanel("stats")
+            "pet" -> {
+                if (prof.pet != 0) { prof.togglePet(prof.pet); toast("Pet dismissed.", C_BLUE) }
+                else host.openPanel("pets")
+            }
+            "fish" -> con("Equip a Fishing Rod (Store > Fishing), then tap water. Tap again when you see '!' to reel in.", C_BLUE)
+            "time" -> {
+                val v = arg.lowercase()
+                val mode = when (v) { "auto" -> 0; "day" -> 1; "sunset", "dusk" -> 2; "night" -> 3; else -> -1 }
+                if (mode < 0) con("Usage: /time <auto|day|sunset|night>", C_YELLOW)
+                else { prof.skyMode = mode; prof.save(); toast("Sky: " + arrayOf("Auto", "Day", "Sunset", "Night")[mode], C_BLUE) }
+            }
+            "weather" -> {
+                val v = arg.lowercase()
+                val mode = when (v) { "auto" -> 0; "clear", "sunny" -> 1; "rain" -> 2; "snow" -> 3; else -> -1 }
+                if (mode < 0) con("Usage: /weather <auto|clear|rain|snow>", C_YELLOW)
+                else { prof.weatherMode = mode; prof.save(); toast("Weather: " + arrayOf("Auto", "Clear", "Rain", "Snow")[mode], C_BLUE) }
+            }
             else -> con("Unknown command. Try /help", C_YELLOW)
         }
     }
 
-    fun warp(name: String) = queue { if (fadeDir == 0) { banner("Warping to ${World.norm(name).uppercase()}…", 1.4f); sfx.play("door"); fadeThen { loadWorld(name, World.NORMAL) } } }
+    fun warp(name: String) = queue { if (fadeDir == 0) { banner("Warping to ${World.norm(name).uppercase()}...", 1.4f); sfx.play("door"); fadeThen { loadWorld(name, World.NORMAL) } } }
 
     // ---------------------------------------------------------------- world loading
     private fun fadeThen(a: () -> Unit) { if (fadeDir != 0) return; fadeDir = 1; fadeAct = a }
@@ -506,6 +569,8 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         world = w
         respawn()
         pn = 0; dn = 0; fn = 0; hitX = -1; holdTx = -1; flashId = 0; flashT = 0f; inAreaId = 0
+        fishMode = 0; fishTx = -1; fishTy = -1; petInit = false; inWater = false
+        prof.bump(Stat.WORLDS)
         con(if (created) "Created world ${n.uppercase()}!" else "Welcome to ${n.uppercase()}", C_GREEN)
         if (w.ownerId == null) con("World is unlocked. Place a World Lock to protect it.", C_YELLOW)
         else con("[LOCKED] World owned by ${w.ownerName}", C_BLUE)
@@ -520,14 +585,24 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         val w = world ?: return
         px = w.doorX + 0.5f - PW / 2; py = w.doorY + 1f - PH
         vx = 0f; vy = 0f; onGround = false; airJumps = maxAir(); camSnap = true
-        burn = 0f; inLava = false
+        burn = 0f; inLava = false; inWater = false; petInit = false
+        fishMode = 0; fishTx = -1; fishTy = -1
     }
 
-    private fun maxAir() = if (prof.hasWings) 1 else 0   // normal jump without wings, double jump with wings
+    private fun maxAir(): Int {
+        var n = if (prof.hasWings) 1 else 0
+        if (prof.pet == Id.PET_DRAGON) n += 1
+        return n
+    }
 
     // ---------------------------------------------------------------- update
     private fun update(dt: Float) {
         while (true) { val j = jobs.poll() ?: break; j.run() }
+        for (a in prof.drainBadges()) {
+            sfx.play("levelup", 0.9f)
+            pushNote("Badge unlocked!", "${a.name}  +${a.reward} gems", C_YELLOW, a.icon, 4.5f, true)
+            con("[BADGE] ${a.name}", C_YELLOW)
+        }
         if (zoomReq != zoom) { zoom = zoomReq; T = max(12, (baseT * zoom).roundToInt()); camSnap = true; prof.zoomPct = (zoom * 100f).roundToInt() }
         time += dt
         val w = world ?: return
@@ -535,6 +610,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         while (cons.isNotEmpty() && cons[0].t > 9f) cons.removeAt(0)
         if (bannerT > 0f) bannerT -= dt
         if (flashT > 0f) flashT -= dt
+        if (guideHold > 0f) guideHold -= dt
         if (notifs.isNotEmpty()) {
             val itn = notifs.iterator()
             while (itn.hasNext()) { val n = itn.next(); n.t += dt; n.slide = min(1f, n.slide + dt * 5f); if (n.t >= n.ttl) itn.remove() }
@@ -545,10 +621,41 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         if (punchT > 0f) punchT -= dt
         if (punchCd > 0f) punchCd -= dt
 
+        // fishing minigame
+        if (fishMode > 0) {
+            fishT -= dt
+            if (fishMode == 1 && fishT <= 0f) {
+                fishMode = 2; fishT = 1.15f
+                sfx.play("notify", 0.85f)
+                floatText(fishTx + 0.5f, fishTy + 0.1f, "!", C_YELLOW)
+            } else if (fishMode == 2 && fishT <= 0f) {
+                fishMode = 0
+                toast("The fish got away...", C_YELLOW)
+            }
+        }
+
+        // daily quest completion banners (once per quest per day)
+        if (prof.questDay != qDay) { qDay = prof.questDay; qDone.fill(false) }
+        qCheckT += dt
+        if (qCheckT >= 1f) {
+            qCheckT = 0f
+            val qs = Daily.today()
+            for (i in 0 until minOf(3, qs.size)) {
+                if (!qDone[i] && !prof.isQuestClaimed(i) && prof.questProgress(i) >= qs[i].goal) {
+                    qDone[i] = true
+                    pushNote("Daily quest ready!", qs[i].title, C_GREEN, Id.T_GEM, 3.5f)
+                }
+            }
+        }
+
         if (fadeDir == 1) { fade += dt * 4f; if (fade >= 1f) { fade = 1f; val a = fadeAct; fadeAct = null; fadeDir = -1; a?.invoke() } }
         else if (fadeDir == -1) { fade -= dt * 3f; if (fade <= 0f) { fade = 0f; fadeDir = 0 } }
 
         if (fadeDir == 0 && world === w) {
+            if (bufT > 0f) {
+                bufT -= dt
+                if (punchCd <= 0f) { val bx = bufTx; val by = bufTy; bufT = 0f; bufTx = -1; if (bx >= 0) { curFirst = false; punch(w, bx, by) } }
+            }
             handleWorldInput(dt)
             var rem = dt
             while (rem > 0f) { val s = min(rem, 1f / 90f); physics(w, s); rem -= s }
@@ -564,6 +671,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         walkT += abs(vx) * dt * 1.7f
 
         updateDrops(w, dt); updateParticles(dt)
+        updatePet(dt)
         updateCamera(dt)
 
         // autosave + UI refresh
@@ -591,8 +699,15 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
 
     private fun physics(w: World, dt: Float) {
         val dir = (if (holdR) 1 else 0) - (if (holdL) 1 else 0)
+        val wet = touchesWater(w)
+        if (wet != inWater) {
+            inWater = wet
+            if (wet) { sfx.play("splash", 0.7f); puff(px + PW / 2, py + PH * 0.7f, 5) }
+        }
         var speed = if (prof.worn(Slot.FEET) == Id.SNEAKERS) SPEED * 1.15f else SPEED
+        if (prof.pet == Id.PET_DOG) speed *= 1.08f
         if (inLava) speed *= 0.55f
+        if (inWater) speed *= 0.68f
         vx = approach(vx, dir * speed, (if (dir == 0) FRIC else if (onGround) ACC_G else ACC_A) * dt)
         if (dir != 0) face = dir
 
@@ -611,14 +726,20 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
             if (jumpHeld) vy = min(vy, -5.5f)                   // hold jump to swim out
             airJumps = maxAir()
         }
-        val maxFall = if (prof.hasWings && jumpHeld && vy > 0f && !onGround) GLIDE else MAXFALL
+        if (inWater) {
+            if (vy > 3.5f) vy = max(3.5f, vy - 55f * dt)        // water is thick: sink slowly
+            if (jumpHeld) vy = min(vy, -4.8f)                   // hold jump to swim up
+            airJumps = maxAir()
+        }
+        var maxFall = if (prof.hasWings && jumpHeld && vy > 0f && !onGround) GLIDE else MAXFALL
+        if (inWater) maxFall = 4f
         if (vy > maxFall) vy = if (maxFall == GLIDE) max(maxFall, vy - 80f * dt) else maxFall
         lastVy = vy
 
         // --- X
         px += vx * dt
-        if (vx > 0f) { val tx = floor(px + PW).toInt(); if (hitCol(w, tx)) { px = tx - PW - 0.001f; vx = 0f } }
-        else if (vx < 0f) { val tx = floor(px).toInt(); if (hitCol(w, tx)) { px = tx + 1f + 0.001f; vx = 0f } }
+        if (vx > 0f) { val tx = floor(px + PW).toInt(); if (hitCol(w, tx) && !(dir > 0 && ledgeAssist(w, tx))) { px = tx - PW - 0.001f; vx = 0f } }
+        else if (vx < 0f) { val tx = floor(px).toInt(); if (hitCol(w, tx) && !(dir < 0 && ledgeAssist(w, tx))) { px = tx + 1f + 0.001f; vx = 0f } }
         px = px.coerceIn(0f, W - PW)
 
         // --- Y
@@ -626,13 +747,23 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         py += vy * dt
         val wasGround = onGround
         onGround = false
-        val c0 = floor(px + 0.02f).toInt(); val c1 = floor(px + PW - 0.02f).toInt()
+        val probe = 0.10f
+        val c0 = floor(px + probe).toInt(); val c1 = floor(px + PW - probe).toInt()
         if (vy > 0f) {
             val ty = floor(py + PH).toInt()
-            var hit = false
-            for (cx in c0..c1) {
+            fun landingBlocked(cx: Int): Boolean {
                 val t = w.get(cx, ty)
-                if (solid(w, cx, ty) || (t == Id.PLATFORM && oldBottom <= ty + 0.03f)) { hit = true; break }
+                return solid(w, cx, ty) || (t == Id.PLATFORM && oldBottom <= ty + 0.06f)
+            }
+            var hit = landingBlocked(c0) || landingBlocked(c1)
+            // Corner correction: when only one foot is caught on a lip but the tile
+            // under the player's centre is open, slide into the gap (cave entrances).
+            if (hit && c0 != c1 && landingBlocked(c0) != landingBlocked(c1)) {
+                val clear = if (landingBlocked(c0)) c1 else c0
+                val targetPx = (clear + 0.5f - PW / 2).coerceIn(0f, W - PW)
+                val nx = px + (targetPx - px).coerceIn(-0.3f, 0.3f)
+                val nc0 = floor(nx + probe).toInt(); val nc1 = floor(nx + PW - probe).toInt()
+                if (!landingBlocked(nc0) && !landingBlocked(nc1)) { px = nx; hit = false }
             }
             if (hit) {
                 py = ty - PH - 0.001f
@@ -643,7 +774,30 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
             val ty = floor(py).toInt()
             var hit = false
             for (cx in c0..c1) if (solid(w, cx, ty)) { hit = true; break }
-            if (hit) { py = ty + 1f + 0.001f; vy = 0f }
+            if (hit && c0 != c1) {
+                // Corner correction: the head clipped a lip but the other side is open -> slide into the hole,
+                // so jumping up through a one-block gap works even if you are a little off-centre.
+                val b0 = solid(w, c0, ty); val b1 = solid(w, c1, ty)
+                if (b0 != b1) {
+                    val clear = if (b0) c1 else c0
+                    val targetPx = (clear + 0.5f - PW / 2).coerceIn(0f, W - PW)
+                    val nx = px + (targetPx - px).coerceIn(-0.4f, 0.4f)
+                    val n0 = floor(nx + probe).toInt(); val n1 = floor(nx + PW - probe).toInt()
+                    var still = false
+                    for (cx in n0..n1) if (solid(w, cx, ty)) { still = true; break }
+                    if (!still) {
+                        val a = floor(nx).toInt(); val b = floor(nx + PW).toInt()
+                        val rb = floor(py + PH - 0.12f).toInt()
+                        for (r in (ty + 1)..rb) if (solid(w, a, r) || solid(w, b, r)) { still = true; break }
+                    }
+                    if (!still) { px = nx; hit = false }
+                }
+            }
+            if (hit) {
+                py = ty + 1f + 0.001f
+                if (lastVy < -7f) sfx.play("bump", min(1f, -lastVy / 14f))
+                vy = 0f
+            }
         }
 
         // --- feedback: steps, glide
@@ -662,7 +816,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     private fun lavaTick(w: World, dt: Float) {
         val now = touchesLava(w)
         if (now) {
-            if (!inLava) { sfx.play("deny", 0.7f); pushNote("Ouch! Lava!", "Hold jump to swim out before you burn up.", C_RED, Id.LAVA, 3f); lavaMsgT = 0f }
+            if (!inLava) { sfx.play("sizzle", 0.8f); pushNote("Ouch! Lava!", "Hold jump to swim out before you burn up.", C_RED, Id.LAVA, 3f); lavaMsgT = 0f }
             burn += dt; lavaMsgT -= dt
             if (lavaMsgT <= 0f) {
                 lavaMsgT = 0.25f
@@ -673,14 +827,32 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         inLava = now
     }
 
+    /** Jumping onto a ledge: if the feet only clip the top of a block by a little, hop up onto it instead of snagging. */
+    private fun ledgeAssist(w: World, tx: Int): Boolean {
+        if (onGround) return false
+        val footRow = floor(py + PH - 0.02f).toInt()
+        val overlap = (py + PH) - footRow
+        if (overlap < 0f || overlap > 0.34f) return false
+        val newPy = footRow - PH - 0.001f
+        val rTop = floor(newPy + 0.02f).toInt()
+        val ca = floor(px + 0.05f).toInt(); val cb = floor(px + PW - 0.05f).toInt()
+        for (r in rTop until footRow) for (cx in min(ca, tx)..max(cb, tx)) if (solid(w, cx, r)) return false
+        py = newPy
+        if (vy > 0f) vy = 0f
+        return true
+    }
+
     private fun doJump(air: Boolean) {
         vy = -JUMP; onGround = false; coyote = 0f; jumpBuf = 0f
         if (air) { sfx.play("djump"); puff(px + PW / 2, py + PH, if (prof.hasWings) 12 else 8) }
         else { sfx.play("jump"); dust(px + PW / 2, py + PH, 3) }
     }
 
+    /** Horizontal collision. While airborne the probe is inset so the player can slip
+     *  through one-block gaps in cave walls instead of snagging the corner. */
     private fun hitCol(w: World, tx: Int): Boolean {
-        val r0 = floor(py + 0.02f).toInt(); val r1 = floor(py + PH - 0.02f).toInt()
+        val inset = if (onGround) 0.02f else 0.12f
+        val r0 = floor(py + inset).toInt(); val r1 = floor(py + PH - inset).toInt()
         for (r in r0..r1) if (solid(w, tx, r)) return true
         return false
     }
@@ -692,11 +864,57 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         return false
     }
 
+    private fun touchesWater(w: World): Boolean {
+        val x0 = floor(px + 0.12f).toInt(); val x1 = floor(px + PW - 0.12f).toInt()
+        val y0 = floor(py + 0.2f).toInt(); val y1 = floor(py + PH - 0.05f).toInt()
+        for (y in y0..y1) for (x in x0..x1) if (w.get(x, y) == Id.WATER) return true
+        return false
+    }
+
     private fun die(msg: String) {
         if (fadeDir != 0) return
-        sfx.play("death"); con(msg, C_RED); con("Respawning at the main door…", C_YELLOW)
+        sfx.play("death"); con(msg, C_RED); con("Respawning at the main door...", C_YELLOW)
         for (i in 0 until 14) addParticle(px + PW / 2, py + PH / 2, (rnd.nextFloat() - 0.5f) * 8f, -rnd.nextFloat() * 8f, 0.7f, 0xFFFF7B30.toInt(), 0.14f)
         fadeThen { respawn() }
+    }
+
+    // ---------------------------------------------------------------- fishing & pets
+    private fun startFishing(tx: Int, ty: Int) {
+        if (fishMode > 0) return
+        if (!inReach(tx, ty)) return farAway()
+        fishTx = tx; fishTy = ty; fishMode = 1; fishT = 0.9f + rnd.nextFloat() * 1.9f
+        sfx.play("flap", 0.35f, 1.4f)
+        floatText(tx + 0.5f, ty + 0.1f, "Cast!", C_BLUE)
+    }
+
+    private fun catchFish(w: World) {
+        if (fishMode == 0) return
+        fishMode = 0
+        val roll = rnd.nextInt(100)
+        val fish = when {
+            roll < 55 -> Id.FISH_SARDINE
+            roll < 82 -> Id.FISH_TILAPIA
+            roll < 95 -> Id.FISH_TUNA
+            else -> Id.FISH_KOI
+        }
+        prof.bump(Stat.FISH)
+        addXpAndCheck(if (fish == Id.FISH_KOI) 12 else 4)
+        // the fish pops out at the player and is collected by the normal drop logic
+        spawnDrop(px + PW / 2, py + PH * 0.35f, fish, 1)
+        sfx.play("pickup")
+        floatText(fishTx + 0.5f, fishTy - 0.2f, "Caught!", C_GREEN)
+        pushNote("Fish on!", "You caught a ${ItemDB[fish].name}.", C_GREEN, fish, 3f)
+    }
+
+    private fun updatePet(dt: Float) {
+        if (prof.pet == 0) { petInit = false; return }
+        val tx = px - face * 1.25f
+        val ty = py + 0.05f
+        if (!petInit) { petX = tx; petY = ty; petInit = true }
+        val k = min(1f, dt * 7f)
+        petX += (tx - petX) * k
+        petY += (ty - petY) * k
+        if (abs(petX - tx) > 4f || abs(petY - ty) > 4f) { petX = tx; petY = ty }
     }
 
     // ---------------------------------------------------------------- world interaction
@@ -728,7 +946,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     }
 
     private fun tapAreaLock(w: World, tx: Int, ty: Int) {
-        if (!inReach(tx, ty)) return toast("Too far away.")
+        if (!inReach(tx, ty)) return farAway()
         val a = w.areaAt(tx, ty) ?: return toast("This lock has no area.", C_YELLOW)
         flashId = a.id; flashT = 3f
         val nm = ItemDB[a.type].name
@@ -746,6 +964,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         w.set(tx, ty, sel)
         val a = w.addArea(tx, ty, sel, prof.uid, prof.name, if (sel == Id.BUILDER_LOCK) 1 else 0, tiles)
         flashId = a.id; flashT = 3f
+        prof.bump(Stat.PLACE); prof.bump(Stat.LOCK)
         val nm = ItemDB[sel].name
         sfx.play("lock"); pushNote("$nm placed", "${tiles.size} tiles locked.", C_BLUE, sel, 3.5f, true)
         con("[${nm.uppercase()}] ${tiles.size}/${ItemDB.lockCap(sel)} tiles protected", C_BLUE)
@@ -780,7 +999,12 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         if (pbNew) {
             pbNew = false; holdTx = tx; holdTy = row; holdT = 0f
             pressedEmpty = w.get(tx, row) == Id.AIR
-            interact(w, tx, row, true); return
+            interact(w, tx, row, true)
+            if (pressedEmpty && !hasItem && fishMode == 0) {
+                punchT = PUNCH_ANIM * 0.8f; punchDx = face.toFloat(); punchDy = 0f
+                sfx.play("swing", 0.6f, 0.95f + rnd.nextFloat() * 0.15f)
+            }
+            return
         }
         if (tx != holdTx || row != holdTy) {
             holdTx = tx; holdTy = row; holdT = 0f
@@ -794,11 +1018,21 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
 
     private fun handleWorldInput(dt: Float) {
         val wp = world
-        if (pbDown && wp != null) { handlePunchButton(wp, dt); return }
-        if (!wDown) { holdTx = -1; return }
+        if (tap2) {
+            tap2 = false
+            if (wp != null) {
+                val t2x = floor((tap2X + camXi) / T).toInt(); val t2y = floor((tap2Y + camYi) / T).toInt()
+                interact(wp, t2x, t2y, true); guideX = t2x; guideY = t2y; guideHold = 0.8f
+            }
+        }
+        if (pbDown || pbNew) { if (wp != null) handlePunchButton(wp, dt); return }
+        // A tap is latched (wTap) so a press+release inside one frame is never lost.
+        val tapped = wTap
+        wTap = false
+        if (!wDown && !tapped) { holdTx = -1; return }
         val tx = floor((wx + camXi) / T).toInt(); val ty = floor((wy + camYi) / T).toInt()
         val w = world ?: return
-        if (wNew) {
+        if (wNew || tapped) {
             wNew = false; holdTx = tx; holdTy = ty; holdT = 0f
             pressedEmpty = w.get(tx, ty) == Id.AIR
             interact(w, tx, ty, true)
@@ -814,23 +1048,33 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
 
     private fun interact(w: World, tx: Int, ty: Int, first: Boolean) {
         if (!w.inb(tx, ty)) return
+        curFirst = first
         val id = w.get(tx, ty)
+        if (fishMode > 0) {
+            if (!first) return
+            if (fishMode == 2) catchFish(w) else toast("Wait for a bite...", C_YELLOW)
+            return
+        }
         if (id == Id.AIR) { if (first) place(w, tx, ty); return }
         val k = ty * W + tx
         when (id) {
+            Id.WATER -> if (first) {
+                if (!prof.hasRod) return toast("Equip a Fishing Rod to fish here.", C_YELLOW)
+                startFishing(tx, ty)
+            }
             Id.MAIN_DOOR -> if (first) {
-                if (!inReach(tx, ty)) return toast("Too far away.")
+                if (!inReach(tx, ty)) return farAway()
                 sfx.play("door", 0.7f)
                 host.confirm("Exit World", "Leave ${w.name.uppercase()} and go back to the lobby?") { host.exitWorld() }
             }
             Id.DOOR -> if (first) {
-                if (!inReach(tx, ty)) return toast("Too far away.")
+                if (!inReach(tx, ty)) return farAway()
                 val dest = w.links.get(k) ?: "start"
-                sfx.play("door"); banner("Entering ${World.norm(dest).uppercase()}…", 1.4f)
+                sfx.play("door"); banner("Entering ${World.norm(dest).uppercase()}...", 1.4f)
                 fadeThen { loadWorld(dest, World.NORMAL) }
             } else if (holdT > 0.7f) punch(w, tx, ty)
             Id.SIGN -> if (first) {
-                if (!inReach(tx, ty)) return toast("Too far away.")
+                if (!inReach(tx, ty)) return farAway()
                 val t = w.texts.get(k) ?: ""
                 sfx.play("notify", 0.5f); pushNote("Sign", if (t.isEmpty()) "(blank sign)" else t, C_WHITE, Id.SIGN, 4f)
             } else if (holdT > 0.7f) punch(w, tx, ty)
@@ -851,33 +1095,36 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     private fun place(w: World, tx: Int, ty: Int) {
         val sel = prof.sel
         if (sel == Id.FIST || prof.count(sel) <= 0) return
+        val k = ty * W + tx
+        // don't instantly rebuild a tile that was just punched apart
+        if (k == lastBreakTile && System.currentTimeMillis() - lastBreakAt < 500L) return
         val item = ItemDB[sel]
         if (item.slot != null) return toast("Equip clothes from your backpack.")
         if (!item.placeable) return toast("${item.name} can't be placed. Open the backpack to use it.")
-        if (!inReach(tx, ty)) return toast("Too far away.")
+        if (!inReach(tx, ty)) return farAway()
         if (!canBuild(w, tx, ty)) return deny(w, tx, ty)
-        if (item.solid && overlapsPlayer(tx, ty)) return
+        if (item.solid && overlapsPlayer(tx, ty)) { sfx.play("deny", 0.4f); return }
         face = if (tx + 0.5f > px + PW / 2) 1 else -1; punchT = 0.15f
-        val k = ty * W + tx
         if (ItemDB.isSeed(sel)) {
             val below = w.get(tx, ty + 1)
             if (!ItemDB.solidTbl[below.coerceIn(0, 127)] && below != Id.PLATFORM) return toast("Seeds need solid ground to grow.")
             w.set(tx, ty, Id.TREE); w.trees.put(k, Tree(ItemDB.blockOfSeed(sel), System.currentTimeMillis()))
-            prof.take(sel, 1); sfx.play("plant"); dust(tx + 0.5f, ty + 1f, 4); uiDirty = true
+            prof.take(sel, 1); prof.bump(Stat.PLACE)
+            sfx.play("plant"); dust(tx + 0.5f, ty + 1f, 4); uiDirty = true
             return
         }
         when (sel) {
             Id.DOOR -> host.promptText("Door destination", "World name", "start", 20) { v ->
                 queue {
                     if (w === world && w.get(tx, ty) == Id.AIR && prof.take(Id.DOOR, 1)) {
-                        w.set(tx, ty, Id.DOOR); w.links.put(k, World.norm(v)); sfx.play("place"); uiDirty = true
+                        w.set(tx, ty, Id.DOOR); w.links.put(k, World.norm(v)); prof.bump(Stat.PLACE); sfx.play("place"); uiDirty = true
                     }
                 }
             }
-            Id.SIGN -> host.promptText("Sign text", "Say something…", "", 80) { v ->
+            Id.SIGN -> host.promptText("Sign text", "Say something...", "", 80) { v ->
                 queue {
                     if (w === world && w.get(tx, ty) == Id.AIR && prof.take(Id.SIGN, 1)) {
-                        w.set(tx, ty, Id.SIGN); w.texts.put(k, v.trim()); sfx.play("place"); uiDirty = true
+                        w.set(tx, ty, Id.SIGN); w.texts.put(k, v.trim()); prof.bump(Stat.PLACE); sfx.play("place"); uiDirty = true
                     }
                 }
             }
@@ -888,12 +1135,13 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
                 prof.take(sel, 1)
                 w.set(tx, ty, sel)
                 w.ownerId = prof.uid; w.ownerName = prof.name; w.lockX = tx; w.lockY = ty
+                prof.bump(Stat.PLACE); prof.bump(Stat.LOCK)
                 sfx.play("lock"); pushNote("World Locked!", "Only you can build here.", C_GREEN, Id.WORLD_LOCK, 3.5f, true)
                 con("[WORLD LOCKED] by ${prof.name}", C_BLUE)
                 prof.addNote("Locked world ${w.name.uppercase()}")
                 addXpAndCheck(10); uiDirty = true
             }
-            else -> { prof.take(sel, 1); w.set(tx, ty, sel); sfx.play("place"); uiDirty = true }
+            else -> { prof.take(sel, 1); w.set(tx, ty, sel); prof.bump(Stat.PLACE); sfx.play("place"); uiDirty = true }
         }
     }
 
@@ -901,9 +1149,9 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         val k = ty * W + tx
         val tr = w.trees.get(k)
         if (tr == null) { w.set(tx, ty, Id.AIR); return }
-        if (!inReach(tx, ty)) return toast("Too far away.")
+        if (!inReach(tx, ty)) return farAway()
         val left = tr.ripeAt() - System.currentTimeMillis()
-        if (left > 0) { toast("Growing… ${left / 1000 + 1}s left.", C_YELLOW); return }
+        if (left > 0) { toast("Growing... ${left / 1000 + 1}s left.", C_YELLOW); return }
         if (!canBreak(w, tx, ty)) return deny(w, tx, ty)
         w.set(tx, ty, Id.AIR)
         face = if (tx + 0.5f > px + PW / 2) 1 else -1; punchT = 0.2f
@@ -915,14 +1163,18 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         if (rnd.nextInt(10) < 4) spawnDrop(cx, cy, Id.SEED + tr.seed, 1)
         for (i in 0 until 10) addParticle(cx, cy, (rnd.nextFloat() - 0.5f) * 6f, -rnd.nextFloat() * 5f, 0.7f, 0xFF6FCB5A.toInt(), 0.12f)
         sfx.play("harvest"); floatText(cx, cy - 0.6f, "Harvested!", C_GREEN)
-        prof.addQuest()
+        prof.bump(Stat.HARVEST)
         addXpAndCheck(5)
     }
 
     private fun punch(w: World, tx: Int, ty: Int) {
-        if (punchCd > 0f) return
+        if (punchCd > 0f) {
+            // a tap that lands during the punch cooldown is remembered instead of being lost
+            if (curFirst && w.get(tx, ty) != Id.AIR) { bufTx = tx; bufTy = ty; bufT = 0.35f }
+            return
+        }
         val id = w.get(tx, ty); if (id == Id.AIR) return
-        if (!inReach(tx, ty)) return toast("Too far away.")
+        if (!inReach(tx, ty)) return farAway()
         if (ItemDB.isAreaLock(id)) {
             val a = w.areaAt(tx, ty)
             if (a != null && a.ownerId == prof.uid) {
@@ -942,13 +1194,19 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         val item = ItemDB[id]
         if (item.hits <= 0) { punchCd = 0.4f; sfx.play("deny", 0.6f); return toast("It's too strong to break.", C_YELLOW) }
         face = if (tx + 0.5f > px + PW / 2) 1 else -1
+        // point the punch at the tile that was tapped (Growtopia-style directional punch)
+        val ax = (tx + 0.5f) - (px + PW / 2)
+        val ay = (ty + 0.5f) - (py + PH * 0.55f)
+        val al = hypot(ax, ay).coerceAtLeast(0.001f)
+        punchDx = ax / al; punchDy = ay / al
         val power = if (prof.hasPickaxe) 2 else 1
-        punchCd = if (prof.hasPickaxe) 0.2f else 0.3f; punchT = 0.2f
+        punchCd = if (prof.hasPickaxe) PUNCH_CD_PICK else PUNCH_CD
+        punchT = PUNCH_ANIM
         val now = System.currentTimeMillis()
-        if (tx != hitX || ty != hitY || now - lastHit > 4000) { hitX = tx; hitY = ty; hitN = 0 }
+        if (tx != hitX || ty != hitY || now - lastHit > 3000L) { hitX = tx; hitY = ty; hitN = 0 }
         hitN += power; lastHit = now
         sfx.play("punch", 0.9f, 0.9f + rnd.nextFloat() * 0.25f)
-        val col = Atlas.avg[id and 63]
+        val col = Atlas.avg[id % Atlas.TILES]
         for (i in 0 until 3) addParticle(tx + 0.5f, ty + 0.5f, (rnd.nextFloat() - 0.5f) * 4f - face * 1.5f, -rnd.nextFloat() * 3f, 0.45f, col, 0.1f)
         if (hitN >= item.hits) breakTile(w, tx, ty, id)
     }
@@ -958,8 +1216,10 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         val cx = tx + 0.5f; val cy = ty + 0.5f
         w.set(tx, ty, Id.AIR)
         hitX = -1; hitN = 0
+        // short grace period so the next tap doesn't instantly rebuild the broken tile
+        lastBreakTile = ty * W + tx; lastBreakAt = System.currentTimeMillis()
         sfx.play("break")
-        val col = Atlas.avg[id and 63]
+        val col = Atlas.avg[id % Atlas.TILES]
         for (i in 0 until 10) addParticle(cx, cy, (rnd.nextFloat() - 0.5f) * 7f, -rnd.nextFloat() * 5f, 0.6f, col, 0.14f)
         if (item.gemMax > 0 && rnd.nextInt(100) < 75) spawnDrop(cx, cy, GEM, item.gemMin + rnd.nextInt(item.gemMax - item.gemMin + 1))
         when (id) {
@@ -970,6 +1230,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
                 if (item.growSec > 0 && rnd.nextInt(100) < 12) spawnDrop(cx, cy, Id.SEED + id, 1)
             }
         }
+        prof.bump(Stat.BREAK)
         addXpAndCheck(1)
     }
 
@@ -1016,7 +1277,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
             if (dage[i] > 150f) { removeDrop(i); continue }
             val ddx = pcx - dx[i]; val ddy = pcy - dy[i]
             val d2 = ddx * ddx + ddy * ddy
-            if (dage[i] > 0.4f && d2 < 2.9f) {
+            if (dage[i] > 0.4f && d2 < (if (prof.pet == Id.PET_SLIME) 7.5f else 2.9f)) {
                 val k = min(1f, dt * 12f)
                 dx[i] += ddx * k; dy[i] += ddy * k
                 if (d2 < 0.2f) { collect(ditem[i], dcnt[i], dx[i], dy[i]); removeDrop(i); continue }
@@ -1036,7 +1297,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     }
 
     private fun collect(item: Int, n: Int, x: Float, y: Float) {
-        if (item == GEM) { prof.addGems(n); sfx.play("gem", 0.8f, 0.95f + rnd.nextFloat() * 0.2f); floatText(x, y - 0.5f, "+$n", C_BLUE) }
+        if (item == GEM) { val gain = n + if (prof.pet == Id.PET_CAT) 1 else 0; prof.addGems(gain); sfx.play("gem", 0.8f, 0.95f + rnd.nextFloat() * 0.2f); floatText(x, y - 0.5f, "+$gain", C_BLUE) }
         else {
             prof.add(item, n); sfx.play("pickup", 0.7f); floatText(x, y - 0.5f, "+$n ${ItemDB[item].name}", C_WHITE)
             prof.autoCompress()?.let { m -> sfx.play("lock"); pushNote("Locks compressed", m, C_BLUE, Id.DIAMOND_LOCK, 4f, true) }
@@ -1103,7 +1364,8 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
     }
 
     private fun render(c: Canvas) {
-        c.drawRect(0f, 0f, vw.toFloat(), vh.toFloat(), skyPaint)
+        if (vw <= 0 || vh <= 0) return
+        drawSky(c)
         val w = world ?: return
         val cxi = camX.roundToInt(); val cyi = camY.roundToInt(); camXi = cxi; camYi = cyi
         val now = System.currentTimeMillis()
@@ -1124,6 +1386,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
                 when (f) {
                     Id.TREE -> drawTree(c, sx, sy, w.trees.get(row + x), now)
                     Id.LAVA -> drawTile(c, lavaFrame, sx, sy, T)
+                    Id.WATER -> drawWater(c, sx, sy)
                     else -> drawTile(c, f, sx, sy, T)
                 }
             }
@@ -1147,26 +1410,235 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         }
 
         // ---- crack overlay + target outline
-        if (hitX >= 0 && hitN > 0 && System.currentTimeMillis() - lastHit < 4000) {
+        if (hitX >= 0 && hitN > 0 && System.currentTimeMillis() - lastHit < 3000) {
             val it = ItemDB[w.get(hitX, hitY)]
             if (it.hits > 0) {
                 val stage = min(3, (hitN * 4 / it.hits))
                 drawTile(c, Id.T_CRACK + stage, hitX * T - cxi, hitY * T - cyi, T)
             }
         }
-        if ((wDown || pbDown) && holdTx >= 0 && w.inb(holdTx, holdTy)) {
-            line.color = if (inReach(holdTx, holdTy)) 0xDDFFFFFF.toInt() else 0xAAFF5555.toInt()
-            line.strokeWidth = dp(2f)
-            c.drawRect((holdTx * T - cxi).toFloat(), (holdTy * T - cyi).toFloat(), ((holdTx + 1) * T - cxi).toFloat(), ((holdTy + 1) * T - cyi).toFloat(), line)
-        }
+        drawGuide(c, w, cxi, cyi)
 
         drawDrops(c, cxi, cyi)
+        drawFishing(c, cxi, cyi)
+        drawPet(c, cxi, cyi)
         drawPlayer(c, cxi, cyi)
         drawParticles(c, cxi, cyi)
+        drawNight(c)
+        drawWeather(c)
         if (burn > 0f) { fill.color = Color.argb((90f * (burn / BURN_MAX)).toInt().coerceIn(0, 120), 255, 60, 20); c.drawRect(0f, 0f, vw.toFloat(), vh.toFloat(), fill) }
         drawHud(c, w)
 
         if (fade > 0f) { fill.color = Color.argb((fade * 255).toInt().coerceIn(0, 255), 0, 0, 0); c.drawRect(0f, 0f, vw.toFloat(), vh.toFloat(), fill) }
+    }
+
+    // ---- placement / punch guide box --------------------------------------
+    /** 0 = nothing to show, 1 = you can place here, 2 = blocked, 3 = punch / tap target. */
+    private fun guideState(w: World, tx: Int, ty: Int): Int {
+        if (!w.inb(tx, ty)) return 0
+        val id = w.get(tx, ty)
+        val reach = inReach(tx, ty)
+        if (id != Id.AIR) return if (reach) 3 else 2
+        val sel = prof.sel
+        if (sel == Id.FIST || prof.count(sel) <= 0 || fishMode > 0) return 0
+        val item = ItemDB[sel]
+        if (item.slot != null || !item.placeable) return 2
+        if (!reach || !canBuild(w, tx, ty)) return 2
+        if (item.solid && overlapsPlayer(tx, ty)) return 2
+        if (ItemDB.isSeed(sel)) {
+            val below = w.get(tx, ty + 1)
+            if (!ItemDB.solidTbl[below.coerceIn(0, 127)] && below != Id.PLATFORM) return 2
+        }
+        if (ItemDB.isAreaLock(sel) && (w.ownerId != null || w.areaAt(tx, ty) != null)) return 2
+        if (ItemDB.isWorldLock(sel) && w.ownerId != null) return 2
+        return 1
+    }
+
+    private fun drawGuide(c: Canvas, w: World, cxi: Int, cyi: Int) {
+        var gx = -1; var gy = -1; var a = 1f
+        if (holdTx >= 0 && w.inb(holdTx, holdTy)) {
+            gx = holdTx; gy = holdTy; guideX = gx; guideY = gy; guideHold = 0.8f          // finger / punch button is down
+        } else if (guideHold > 0f) {
+            gx = guideX; gy = guideY; a = (guideHold / 0.8f).coerceIn(0f, 1f)            // fades out after release
+        } else {
+            val sel = prof.sel                                                              // idle: show where the item will go
+            if (sel != Id.FIST && prof.count(sel) > 0 && fishMode == 0 && ItemDB[sel].slot == null && ItemDB[sel].placeable) {
+                gx = floor(px + PW / 2 + face * (PW / 2 + 0.35f)).toInt(); gy = floor(py + PH * 0.55f).toInt(); a = 0.55f
+            }
+        }
+        if (gx < 0 || !w.inb(gx, gy)) return
+        val st = guideState(w, gx, gy)
+        if (st == 0 || (a < 0.6f && guideHold <= 0f && st == 3)) return
+        val col = when (st) { 1 -> 0x4CE06B; 3 -> 0xFFFFFF; else -> 0xFF5555 }
+        val s = T.toFloat(); val sx = (gx * T - cxi).toFloat(); val sy = (gy * T - cyi).toFloat()
+        val pulse = 0.78f + 0.22f * sin(time * 8f)
+        if (st == 1) {   // ghost of the block / seed about to be placed
+            val sel = prof.sel
+            val gid = if (ItemDB.isSeed(sel)) ItemDB.blockOfSeed(sel) else sel
+            fill.color = ((80 * a).toInt() shl 24) or (Atlas.avg[gid % Atlas.TILES] and 0xFFFFFF)
+            c.drawRect(sx, sy, sx + s, sy + s, fill)
+        }
+        fill.color = ((if (st == 2) 60 else 40) * a).toInt() shl 24 or col
+        c.drawRect(sx, sy, sx + s, sy + s, fill)
+        line.color = ((255 * a * pulse).toInt().coerceIn(0, 255) shl 24) or col
+        line.strokeWidth = dp(2f)
+        c.drawRect(sx + 1f, sy + 1f, sx + s - 1f, sy + s - 1f, line)
+        val k = s * 0.3f
+        line.strokeWidth = dp(3.5f)
+        c.drawLine(sx, sy, sx + k, sy, line); c.drawLine(sx, sy, sx, sy + k, line)
+        c.drawLine(sx + s, sy, sx + s - k, sy, line); c.drawLine(sx + s, sy, sx + s, sy + k, line)
+        c.drawLine(sx, sy + s, sx + k, sy + s, line); c.drawLine(sx, sy + s, sx, sy + s - k, line)
+        c.drawLine(sx + s, sy + s, sx + s - k, sy + s, line); c.drawLine(sx + s, sy + s, sx + s, sy + s - k, line)
+        if (st == 2) {   // blocked: red cross
+            val m = s * 0.3f; line.strokeWidth = dp(3f)
+            c.drawLine(sx + m, sy + m, sx + s - m, sy + s - m, line); c.drawLine(sx + s - m, sy + m, sx + m, sy + s - m, line)
+        }
+    }
+
+    // ---- sky / weather / water -------------------------------------------
+    private fun mix(a: Int, b: Int, t: Float): Int {
+        val ar = (a shr 16) and 255; val ag = (a shr 8) and 255; val ab = a and 255
+        val br = (b shr 16) and 255; val bg = (b shr 8) and 255; val bb = b and 255
+        val r = (ar + (br - ar) * t).toInt().coerceIn(0, 255)
+        val g = (ag + (bg - ag) * t).toInt().coerceIn(0, 255)
+        val bl = (ab + (bb - ab) * t).toInt().coerceIn(0, 255)
+        return (0xFF shl 24) or (r shl 16) or (g shl 8) or bl
+    }
+
+    private fun skyPhase(): Float = when (prof.skyMode) {
+        1 -> 0.22f
+        2 -> 0.52f
+        3 -> 0.78f
+        else -> (time / 240f) % 1f
+    }
+
+    private fun nightFactor(p: Float): Float = when {
+        p < 0.50f -> 0f
+        p < 0.56f -> (p - 0.50f) / 0.06f
+        p < 0.88f -> 1f
+        p < 0.96f -> 1f - (p - 0.88f) / 0.08f
+        else -> 0f
+    }
+
+    private fun drawSky(c: Canvas) {
+        val p = skyPhase()
+        var a = skyStops[0]; var b = skyStops[skyStops.size - 1]
+        for (i in 0 until skyStops.size - 1) {
+            if (p >= skyStops[i].first && p <= skyStops[i + 1].first) { a = skyStops[i]; b = skyStops[i + 1]; break }
+        }
+        val span = max(0.0001f, b.first - a.first)
+        val t = ((p - a.first) / span).coerceIn(0f, 1f)
+        val top = mix(a.second[0], b.second[0], t)
+        val bot = mix(a.second[1], b.second[1], t)
+        val key = top xor bot
+        if (skyKey != key || skyH != vh) {
+            skyKey = key; skyH = vh
+            skyPaint.shader = LinearGradient(0f, 0f, 0f, vh.toFloat(), top, bot, Shader.TileMode.CLAMP)
+        }
+        c.drawRect(0f, 0f, vw.toFloat(), vh.toFloat(), skyPaint)
+
+        val night = nightFactor(p)
+        // stars
+        if (night > 0.03f) {
+            for (i in 0 until 44) {
+                val x = ((i * 127 + 31) % max(1, vw)).toFloat()
+                val y = ((i * 79 + 17) % max(1, (vh * 0.62f).toInt())).toFloat()
+                val tw = (0.55f + 0.45f * sin(time * 2.2f + i * 0.9f)).coerceIn(0f, 1f)
+                fill.color = (((night * 190f * tw).toInt().coerceIn(0, 255)) shl 24) or 0xFFFFFF
+                c.drawCircle(x, y, dp(1.2f), fill)
+            }
+        }
+        // sun by day, moon by night
+        val arc = p
+        val sx = vw * (0.08f + 0.84f * arc)
+        val sy = vh * (0.26f - 0.14f * sin(arc * Math.PI.toFloat()))
+        if (night < 0.55f) {
+            fill.color = 0x33FFE58A
+            c.drawCircle(sx, sy, dp(30f), fill)
+            fill.color = 0xFFFFE58A.toInt()
+            c.drawCircle(sx, sy, dp(17f), fill)
+        } else {
+            fill.color = 0x33EDEDF2
+            c.drawCircle(sx, sy, dp(24f), fill)
+            fill.color = 0xFFEDEDF2.toInt()
+            c.drawCircle(sx, sy, dp(14f), fill)
+            fill.color = 0xFFD0D4E0.toInt()
+            c.drawCircle(sx - dp(4f), sy - dp(3f), dp(4f), fill)
+            c.drawCircle(sx + dp(5f), sy + dp(4f), dp(2.5f), fill)
+        }
+    }
+
+    private fun drawNight(c: Canvas) {
+        val n = nightFactor(skyPhase())
+        if (n <= 0.02f) return
+        fill.color = ((n * 68f).toInt().coerceIn(0, 90) shl 24)
+        c.drawRect(0f, 0f, vw.toFloat(), vh.toFloat(), fill)
+    }
+
+    private fun weatherNow(): Int {
+        if (prof.weatherMode != 0) return prof.weatherMode
+        val s = (world?.name?.hashCode() ?: 0) + (time / 90f).toInt()
+        return when (((s % 13) + 13) % 13) { 0, 1 -> 2; 2 -> 3; else -> 1 }
+    }
+
+    private fun drawWeather(c: Canvas) {
+        val wy = weatherNow()
+        if (wy == 1 || prof.lowGfx) return
+        if (wy == 2) {
+            line.color = 0x99A8D0FF.toInt(); line.strokeWidth = dp(1.2f)
+            val n = 70
+            for (i in 0 until n) {
+                val x = ((i * 83 + time * 240f) % (vw + 40)) - 20f
+                val y = ((i * 47 + time * 520f) % (vh + 40)) - 20f
+                c.drawLine(x, y, x - dp(3f), y + dp(12f), line)
+            }
+        } else {
+            fill.color = 0xCCFFFFFF.toInt()
+            for (i in 0 until 55) {
+                val sway = sin(time * 1.3f + i) * dp(10f)
+                val x = ((i * 71 + time * 32f + sway) % (vw + 40)) - 20f
+                val y = ((i * 43 + time * 62f) % (vh + 40)) - 20f
+                c.drawCircle(x, y, dp(1.6f), fill)
+            }
+        }
+    }
+
+    private fun drawWater(c: Canvas, sx: Int, sy: Int) {
+        fill.color = 0xCC2F7FB8.toInt()
+        c.drawRect(sx.toFloat(), sy.toFloat(), (sx + T).toFloat(), (sy + T).toFloat(), fill)
+        fill.color = 0x55BFE8FF
+        c.drawRect(sx.toFloat(), sy.toFloat(), (sx + T).toFloat(), sy + T * 0.28f, fill)
+        line.color = 0x99DFF6FF.toInt(); line.strokeWidth = max(1f, T * 0.05f)
+        val wob = sin(time * 2.2f + sx * 0.05f) * T * 0.10f
+        c.drawLine(sx.toFloat(), sy + T * 0.55f + wob, (sx + T).toFloat(), sy + T * 0.55f - wob, line)
+        c.drawLine(sx.toFloat(), sy + T * 0.82f - wob, (sx + T).toFloat(), sy + T * 0.82f + wob, line)
+    }
+
+    private fun drawFishing(c: Canvas, cxi: Int, cyi: Int) {
+        if (fishMode == 0 || fishTx < 0) return
+        val bx = (fishTx + 0.5f) * T - cxi
+        val by = (fishTy + 0.35f) * T - cyi + sin(time * 4f) * T * 0.06f
+        line.color = 0x99FFFFFF.toInt(); line.strokeWidth = dp(1f)
+        c.drawLine((px + PW / 2) * T - cxi, (py + PH * 0.55f) * T - cyi, bx, by, line)
+        fill.color = 0xFFFFFFFF.toInt(); c.drawCircle(bx, by, T * 0.10f, fill)
+        fill.color = 0xFFE04040.toInt(); c.drawCircle(bx, by - T * 0.08f, T * 0.06f, fill)
+        if (fishMode == 2) {
+            textP.textSize = dp(20f); textP.textAlign = Paint.Align.CENTER
+            shadowText(c, "!", bx, by - T * 0.45f, C_YELLOW)
+            textP.textAlign = Paint.Align.LEFT
+        }
+    }
+
+    private fun drawPet(c: Canvas, cxi: Int, cyi: Int) {
+        val id = prof.pet
+        if (id == 0) return
+        val sz = T * 0.85f
+        val bob = sin(time * 5f) * T * 0.05f
+        val x = petX * T - cxi - sz / 2
+        val y = petY * T - cyi - sz / 2 + bob
+        fill.color = 0x33000000
+        c.drawOval(x + sz * 0.15f, y + sz * 0.85f, x + sz * 0.85f, y + sz * 1.05f, fill)
+        drawIcon(c, id, x, y, sz)
     }
 
     private fun drawClouds(c: Canvas) {
@@ -1191,7 +1663,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         val r = T * (0.12f + 0.28f * f)
         c.drawCircle(cx, base - th, r, fill)
         if (f >= 1f && tr != null) {
-            fill.color = Atlas.avg[tr.seed and 63]
+            fill.color = Atlas.avg[tr.seed % Atlas.TILES]
             val fr = T * 0.07f
             c.drawCircle(cx - r * 0.5f, base - th - r * 0.1f, fr, fill)
             c.drawCircle(cx + r * 0.45f, base - th + r * 0.2f, fr, fill)
@@ -1287,12 +1759,17 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         }
         // front arm (+ punch / emote animation)
         val shoulderY = fy - 16.4f * u
-        val armPhase = if (punchT > 0f) sin(Math.PI.toFloat() * (1f - punchT / 0.2f)) else 0f
+        val armPhase = if (punchT > 0f) sin(Math.PI.toFloat() * (1f - punchT / PUNCH_ANIM)) else 0f
         if (punchT > 0f) {
             val len = (3f + 7f * armPhase) * u
+            // rotate the arm toward the tile that was punched (the canvas is mirrored by `face`)
+            val localDx = punchDx * face
+            val ang = Math.toDegrees(atan2(punchDy.toDouble(), localDx.toDouble())).toFloat()
+            c.save(); c.rotate(ang, cx + 2f * u, shoulderY + 1.1f * u)
             fill.color = shirt; c.drawRect(cx + 2f * u, shoulderY, cx + 2f * u + len, shoulderY + 2.2f * u, fill)
             if (prof.hasPickaxe) drawToolAt(c, cx + 2f * u + len, shoulderY + 1f * u, u, armPhase)
             else { fill.color = skin; c.drawRect(cx + 2f * u + len, shoulderY - 0.4f * u, cx + 2f * u + len + 2.6f * u, shoulderY + 2.6f * u, fill) }
+            c.restore()
         } else if (emote == 1) {
             val ang = sin(time * 12f) * 0.4f
             c.save(); c.rotate(-150f + ang * 40f, cx + 3.5f * u, shoulderY)
@@ -1421,8 +1898,6 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         }
 
         drawControls(c)
-
-        if (prof.showFps) { textP.textSize = ud(11f); shadowText(c, "$fps fps", vw - ud(150f), vh - ud(100f), C_GREEN) }
     }
 
     private fun drawControls(c: Canvas) {
@@ -1484,3 +1959,6 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         textP.textAlign = Paint.Align.LEFT
     }
 }
+
+
+

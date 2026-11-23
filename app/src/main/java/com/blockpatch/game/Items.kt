@@ -34,6 +34,32 @@ object Id {
     const val FIST = 39
     const val SEED = 1000   // seed id = SEED + block id
 
+    // ---- Adventure Update: water, tools, new blocks
+    const val WATER = 60          // special-rendered, non-solid
+    const val FISHING_ROD = 61
+    const val ICE = 64
+    const val CLOUD = 65
+    const val CRYSTAL = 66
+    const val MUSHROOM = 67
+    const val NEON = 68
+    const val OBSIDIAN = 69
+    const val SANDSTONE = 70
+    const val CORAL = 71
+    const val VOLCANIC = 72
+    const val AMETHYST = 73
+    const val RUBY = 74
+    const val EMERALD = 75
+
+    // catch / companion items (kept below SEED so they are never treated as seeds)
+    const val FISH_SARDINE = 100
+    const val FISH_TILAPIA = 101
+    const val FISH_TUNA = 102
+    const val FISH_KOI = 103
+    const val PET_DOG = 110
+    const val PET_CAT = 111
+    const val PET_DRAGON = 112
+    const val PET_SLIME = 113
+
     // Filipino blocks (block id == atlas tile index, must stay < 64)
     const val BAMBOO = 22       // Kawayan
     const val NIPA = 23         // Pawid / nipa thatch
@@ -64,6 +90,7 @@ object Id {
     const val T_SEED = 20
     const val T_LAVA2 = 21
     const val T_CRACK = 48
+    const val T_WATER = 88
 }
 
 enum class Slot { HAT, FACE, BACK, FEET, HAND }
@@ -80,10 +107,11 @@ class Item(
     @JvmField val growSec: Int = 0,       // >0 means a seed can be planted
     @JvmField val slot: Slot? = null,
     @JvmField val desc: String = "",
-    @JvmField val placeable: Boolean = false
+    @JvmField val placeable: Boolean = false,
+    @JvmField val pet: Boolean = false
 )
 
-/** A Filipino-themed block + its seed. price = gems for a 3-seed pack in the shop. */
+/** A themed block + its seed. price = gems for a 3-seed pack in the shop. */
 class Pinoy(
     val id: Int, val name: String, val hits: Int, val solid: Boolean, val clear: Boolean,
     val gMin: Int, val gMax: Int, val grow: Int, val price: Int, val desc: String
@@ -109,11 +137,27 @@ val PINOY: List<Pinoy> = listOf(
     Pinoy(Id.UBE, "Ube", 3, true, false, 1, 3, 40, 14, "Purple yam. Great for halo-halo."),
     Pinoy(Id.PALAY, "Palay", 3, true, false, 0, 2, 25, 8, "Unhusked rice, the heart of every meal."),
     Pinoy(Id.LANGKA, "Langka", 4, true, false, 1, 3, 45, 15, "Jackfruit: big, spiky, and sweet inside."),
-    Pinoy(Id.PINEAPPLE, "Pinya", 3, true, false, 1, 3, 40, 14, "Pineapple. Its fiber makes piña cloth."),
+    Pinoy(Id.PINEAPPLE, "Pinya", 3, true, false, 1, 3, 40, 14, "Pineapple. Its fiber makes pina cloth."),
     Pinoy(Id.SUGARCANE, "Tubo", 3, true, false, 0, 2, 30, 9, "Sugarcane stalks."),
     Pinoy(Id.PAPAYA, "Papaya", 3, true, false, 1, 2, 30, 10, "Orange, soft, and sweet."),
     Pinoy(Id.PILI, "Pili Nut", 5, true, false, 2, 4, 70, 30, "Rare nut from Bicol."),
     Pinoy(Id.KAMOTE, "Kamote", 3, true, false, 0, 2, 25, 8, "Sweet potato. Perfect merienda.")
+)
+
+/** Adventure Update decorative blocks. */
+val DECOR: List<Pinoy> = listOf(
+    Pinoy(Id.ICE, "Ice", 3, true, false, 1, 2, 25, 18, "Slippery-looking frost block."),
+    Pinoy(Id.CLOUD, "Cloud", 2, false, true, 0, 1, 30, 20, "A soft cloud you can walk through."),
+    Pinoy(Id.CRYSTAL, "Crystal", 6, true, false, 2, 4, 70, 35, "A glowing blue crystal cluster."),
+    Pinoy(Id.MUSHROOM, "Mushroom", 3, true, false, 1, 2, 35, 15, "A giant spotted mushroom."),
+    Pinoy(Id.NEON, "Neon", 4, true, false, 2, 3, 60, 30, "A bright neon grid panel."),
+    Pinoy(Id.OBSIDIAN, "Obsidian", 9, true, false, 4, 8, 120, 60, "Volcanic glass. Very tough."),
+    Pinoy(Id.SANDSTONE, "Sandstone", 3, true, false, 1, 2, 30, 12, "Layered desert stone."),
+    Pinoy(Id.CORAL, "Coral", 2, false, true, 1, 3, 40, 20, "Colorful coral from a warm reef."),
+    Pinoy(Id.VOLCANIC, "Volcanic Rock", 7, true, false, 3, 6, 90, 45, "Still warm from the volcano."),
+    Pinoy(Id.AMETHYST, "Amethyst", 5, true, false, 3, 5, 85, 40, "A purple gem block."),
+    Pinoy(Id.RUBY, "Ruby", 6, true, false, 4, 6, 100, 50, "A deep red gem block."),
+    Pinoy(Id.EMERALD, "Emerald", 6, true, false, 4, 6, 100, 50, "A vivid green gem block.")
 )
 
 object ItemDB {
@@ -155,8 +199,29 @@ object ItemDB {
         reg(Item(Id.PICKAXE, "Golden Pickaxe", 38, slot = Slot.HAND, desc = "Punch twice as hard and faster."))
         reg(Item(Id.T_GEM, "Gem", Id.T_GEM))
         reg(Item(Id.FIST, "Fist", 39, desc = "Punch blocks. Tap empty space to place the selected item."))
-        for (f in PINOY) reg(Item(f.id, f.name, f.id, f.hits, f.solid, f.clear, f.gMin, f.gMax, f.grow, desc = f.desc, placeable = true))
-        for (b in listOf(Id.DIRT, Id.ROCK, Id.WOOD, Id.BRICK, Id.GLASS, Id.GOLD, Id.SAND) + PINOY.map { it.id }) {
+
+        // ---- Adventure Update
+        reg(Item(Id.WATER, "Water", Id.T_WATER, 0, false, false, 0, 0, 0,
+            desc = "A pond. Equip a Fishing Rod and tap the water to fish.", placeable = true))
+        reg(Item(Id.FISHING_ROD, "Fishing Rod", 60, slot = Slot.HAND,
+            desc = "Equip it, then tap water. Tap again when you see the '!' to reel in a fish."))
+        for (f in listOf(
+            Item(Id.FISH_SARDINE, "Sardine", 76, desc = "A small, common fish. Sell it at the store."),
+            Item(Id.FISH_TILAPIA, "Tilapia", 77, desc = "A sturdy pond fish."),
+            Item(Id.FISH_TUNA, "Tuna", 78, desc = "A fast, valuable ocean fish."),
+            Item(Id.FISH_KOI, "Golden Koi", 79, desc = "A rare, lucky fish. Worth a lot of gems.")
+        )) reg(f)
+        for (p in listOf(
+            Item(Id.PET_DOG, "Puppy", 80, pet = true, desc = "A loyal pup. Follows you and makes you slightly faster."),
+            Item(Id.PET_CAT, "Kitten", 81, pet = true, desc = "A lucky kitten. Finds an extra gem in every gem drop."),
+            Item(Id.PET_DRAGON, "Baby Dragon", 82, pet = true, desc = "A tiny dragon. Grants an extra mid-air jump."),
+            Item(Id.PET_SLIME, "Slime", 83, pet = true, desc = "A friendly slime. Pulls drops toward you from farther away.")
+        )) reg(p)
+
+        for (f in PINOY + DECOR) reg(Item(f.id, f.name, f.id, f.hits, f.solid, f.clear, f.gMin, f.gMax, f.grow, desc = f.desc, placeable = true))
+        val seedable = listOf(Id.DIRT, Id.ROCK, Id.WOOD, Id.BRICK, Id.GLASS, Id.GOLD, Id.SAND) +
+            PINOY.map { it.id } + DECOR.map { it.id }
+        for (b in seedable) {
             val base = map[b]!!
             reg(Item(Id.SEED + b, base.name + " Seed", Id.T_SEED, growSec = base.growSec,
                 desc = "Plant on solid ground. Grows in ${base.growSec}s.", placeable = true))
@@ -172,6 +237,39 @@ object ItemDB {
     fun isLock(id: Int) = isWorldLock(id) || isAreaLock(id)
     fun lockCap(id: Int) = when (id) { Id.SMALL_LOCK -> 10; Id.BIG_LOCK -> 48; Id.HUGE_LOCK, Id.BUILDER_LOCK -> 200; else -> 0 }
     fun isCurrency(id: Int) = id == Id.WORLD_LOCK || id == Id.DIAMOND_LOCK || id == Id.BLUE_LOCK
+    fun isFish(id: Int) = id in Id.FISH_SARDINE..Id.FISH_KOI
+    fun isPet(id: Int) = id in Id.PET_DOG..Id.PET_SLIME
+    fun isRod(id: Int) = id == Id.FISHING_ROD
+}
+
+/** What the store pays for one item. */
+object Prices {
+    fun sell(id: Int): Int = when (id) {
+        Id.FISH_SARDINE -> 8
+        Id.FISH_TILAPIA -> 18
+        Id.FISH_TUNA -> 45
+        Id.FISH_KOI -> 120
+        Id.PET_DOG -> 100
+        Id.PET_CAT -> 150
+        Id.PET_DRAGON -> 400
+        Id.PET_SLIME -> 250
+        Id.FISHING_ROD -> 20
+        Id.WATER -> 1
+        Id.DIRT, Id.SAND -> 1
+        Id.ROCK, Id.WOOD, Id.GLASS -> 2
+        Id.BRICK -> 3
+        Id.GOLD -> 8
+        Id.DIAMOND_LOCK -> 80
+        Id.BLUE_LOCK -> 800
+        else -> {
+            val it = ItemDB[id]
+            when {
+                ItemDB.isSeed(id) -> maxOf(2, ItemDB[ItemDB.blockOfSeed(id)].gemMin * 2 + 2)
+                it.slot != null -> maxOf(20, it.gemMax * 5)
+                else -> maxOf(1, it.gemMin + 1)
+            }
+        }
+    }
 }
 
 class Offer(val item: Int, val qty: Int, val price: Int)
@@ -191,6 +289,14 @@ object Shop {
         "Pinoy Seeds" to PINOY.map { Offer(Id.SEED + it.id, 3, it.price) },
         "Pinoy Blocks" to PINOY.filter { it.solid || it.id == Id.PAROL || it.id == Id.SAMPAGUITA }
             .map { Offer(it.id, 10, it.price * 3) },
+        "Decor" to (DECOR.map { Offer(it.id, 10, it.price * 3) } + DECOR.map { Offer(Id.SEED + it.id, 3, it.price) }),
+        "Fishing" to listOf(
+            Offer(Id.FISHING_ROD, 1, 50), Offer(Id.WATER, 10, 15)
+        ),
+        "Pets" to listOf(
+            Offer(Id.PET_DOG, 1, 300), Offer(Id.PET_CAT, 1, 450),
+            Offer(Id.PET_SLIME, 1, 750), Offer(Id.PET_DRAGON, 1, 1200)
+        ),
         "Locks" to listOf(
             Offer(Id.SMALL_LOCK, 1, 25), Offer(Id.BIG_LOCK, 1, 75), Offer(Id.HUGE_LOCK, 1, 200),
             Offer(Id.BUILDER_LOCK, 1, 250),
@@ -203,18 +309,27 @@ object Shop {
         )
     )
     val recipes = listOf(
-        Recipe("Brick ×1  ←  3 Rock", listOf(Id.ROCK to 3), listOf(Id.BRICK to 1)),
-        Recipe("Glass ×2  ←  3 Dirt", listOf(Id.DIRT to 3), listOf(Id.GLASS to 2)),
-        Recipe("Platform ×2  ←  1 Wood Block", listOf(Id.WOOD to 1), listOf(Id.PLATFORM to 2)),
-        Recipe("Splice: Narra Seed  ←  Wood Seed + Bamboo Seed",
+        Recipe("Brick x1  ->  3 Rock", listOf(Id.ROCK to 3), listOf(Id.BRICK to 1)),
+        Recipe("Glass x2  ->  3 Dirt", listOf(Id.DIRT to 3), listOf(Id.GLASS to 2)),
+        Recipe("Platform x2  ->  1 Wood Block", listOf(Id.WOOD to 1), listOf(Id.PLATFORM to 2)),
+        Recipe("Splice: Narra Seed  ->  Wood Seed + Bamboo Seed",
             listOf(Id.SEED + Id.WOOD to 1, Id.SEED + Id.BAMBOO to 1), listOf(Id.SEED + Id.NARRA to 1)),
-        Recipe("Splice: Adobe Seed  ←  Brick Seed + Sand Seed",
+        Recipe("Splice: Adobe Seed  ->  Brick Seed + Sand Seed",
             listOf(Id.SEED + Id.BRICK to 1, Id.SEED + Id.SAND to 1), listOf(Id.SEED + Id.ADOBE to 1)),
-        Recipe("Splice: Parol Seed  ←  Capiz Seed + Bamboo Seed",
+        Recipe("Splice: Parol Seed  ->  Capiz Seed + Bamboo Seed",
             listOf(Id.SEED + Id.CAPIZ to 1, Id.SEED + Id.BAMBOO to 1), listOf(Id.SEED + Id.PAROL to 1)),
-        Recipe("Splice: Jeepney Seed  ←  Gold Seed + Rock Seed",
+        Recipe("Splice: Jeepney Seed  ->  Gold Seed + Rock Seed",
             listOf(Id.SEED + Id.GOLD to 1, Id.SEED + Id.ROCK to 1), listOf(Id.SEED + Id.JEEPNEY to 1)),
-        Recipe("Splice: Gold Seed  ←  Wood Seed + Rock Seed",
-            listOf(Id.SEED + Id.WOOD to 1, Id.SEED + Id.ROCK to 1), listOf(Id.SEED + Id.GOLD to 1))
+        Recipe("Splice: Gold Seed  ->  Wood Seed + Rock Seed",
+            listOf(Id.SEED + Id.WOOD to 1, Id.SEED + Id.ROCK to 1), listOf(Id.SEED + Id.GOLD to 1)),
+        Recipe("Splice: Ice Seed  ->  Glass Seed + Rock Seed",
+            listOf(Id.SEED + Id.GLASS to 1, Id.SEED + Id.ROCK to 1), listOf(Id.SEED + Id.ICE to 1)),
+        Recipe("Splice: Crystal Seed  ->  Ice Seed + Gold Seed",
+            listOf(Id.SEED + Id.ICE to 1, Id.SEED + Id.GOLD to 1), listOf(Id.SEED + Id.CRYSTAL to 1)),
+        Recipe("Splice: Mushroom Seed  ->  Dirt Seed + Wood Seed",
+            listOf(Id.SEED + Id.DIRT to 1, Id.SEED + Id.WOOD to 1), listOf(Id.SEED + Id.MUSHROOM to 1)),
+        Recipe("Splice: Neon Seed  ->  Crystal Seed + Glass Seed",
+            listOf(Id.SEED + Id.CRYSTAL to 1, Id.SEED + Id.GLASS to 1), listOf(Id.SEED + Id.NEON to 1))
     )
 }
+

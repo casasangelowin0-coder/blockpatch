@@ -18,7 +18,7 @@ class Sfx(private val ctx: Context, private val prof: Profile) {
 
     init {
         val names = listOf("punch", "break", "place", "jump", "djump", "step", "land", "pickup", "gem", "lock", "unlock",
-            "door", "deny", "notify", "chat", "levelup", "equip", "death", "plant", "flap", "ripe", "harvest", "buy", "dig")
+            "door", "deny", "notify", "chat", "levelup", "equip", "death", "plant", "flap", "ripe", "harvest", "buy", "dig", "tap", "swing", "bump", "sizzle", "splash")
         for (n in names) try {
             ctx.assets.openFd("snd/$n.wav").use { ids[n] = pool.load(it, 1) }
         } catch (_: Exception) { }

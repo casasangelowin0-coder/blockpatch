@@ -217,6 +217,16 @@ class World(val name: String) {
                     val rockP = ((d - 4) / 24f).coerceIn(0f, 0.85f)
                     if (hash2(x, y, s) < rockP) id = Id.ROCK
                     if (d > 9 && hash2(x, y, s + 5) < 0.012f) id = Id.GOLD
+                    if (d > 12 && hash2(x, y, s + 21) < 0.008f) id = Id.CRYSTAL
+                    if (d > 18 && hash2(x, y, s + 22) < 0.006f) id = Id.OBSIDIAN
+                    if (d > 7 && hash2(x, y, s + 23) < 0.005f) {
+                        id = when (hash2(x, y, s + 24)) {
+                            in 0f..0.33f -> Id.AMETHYST
+                            in 0.33f..0.66f -> Id.RUBY
+                            else -> Id.EMERALD
+                        }
+                    }
+                    if (d > 5 && hash2(x, y, s + 25) < 0.006f) id = Id.MUSHROOM
                 } else if (vnoise(x * 0.35f, y * 0.35f, s + 9) > 0.8f && d in 1..3) id = Id.SAND
                 val nearDoor = Math.abs(x - doorX) <= 3 && d <= 8
                 if (!nearDoor) {
@@ -229,6 +239,25 @@ class World(val name: String) {
         }
         doorY = (if (type == HILLS) doorSurf else SURF) - 1
         if (type == BLANK) doorY = SURF - 1
+        // ponds: small surface lakes you can fish in
+        if (type != BLANK) {
+            val ponds = 1 + rnd.nextInt(2)
+            repeat(ponds) {
+                var cx = 10 + rnd.nextInt(W - 20)
+                if (Math.abs(cx - doorX) < 10) cx = 10 + (cx + 30) % (W - 20)
+                val half = 3 + rnd.nextInt(2)
+                for (x in (cx - half)..(cx + half)) {
+                    if (x !in 0 until W || Math.abs(x - doorX) <= 5) continue
+                    val top = if (type == HILLS) surfaceAt(x) else SURF
+                    for (dy in -1..0) {
+                        val y = top + dy
+                        if (y in 1 until H - 4) fg[y * W + x] = Id.WATER.toByte()
+                    }
+                    val bottom = (top + 1).coerceAtMost(H - 4)
+                    if (fg[bottom * W + x].toInt() == Id.AIR) fg[bottom * W + x] = Id.SAND.toByte()
+                }
+            }
+        }
         fg[(doorY + 1) * W + doorX] = Id.BEDROCK.toByte()
         fg[doorY * W + doorX] = Id.MAIN_DOOR.toByte()
         dirty = true
