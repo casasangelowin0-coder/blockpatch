@@ -414,7 +414,7 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
                 val x = e.getX(i); val y = e.getY(i)
                 if (id == worldPtr) { wx = x; wy = y }
                 else if (role[id] == 1 || role[id] == 2) {
-                    if (rR.contains(x, y)) role[id] = 2 else if (rL.contains(x, y)) role[id] = 1
+                    val cr = ctrlAt(x, y); if (cr == 1 || cr == 2) role[id] = cr
                     refresh()
                 }
                 }
@@ -425,8 +425,31 @@ class GameView(ctx: Context, private val prof: Profile, private val sfx: Sfx, pr
         return true
     }
 
+    /** Which control button (1=left, 2=right, 3=jump, 6=punch) a touch belongs to. Hit areas are padded so edge taps and the gaps between buttons still count. */
+    private fun ctrlAt(x: Float, y: Float): Int {
+        for (h in hotR) if (h.contains(x, y)) return 0
+        if (tabR.contains(x, y) || rZi.contains(x, y) || rZo.contains(x, y)) return 0
+        val m = dp(14f)
+        var best = 0; var bd = Float.MAX_VALUE
+        for (i in 0..3) {
+            val r = when (i) { 0 -> rL; 1 -> rR; 2 -> rJ; else -> rP }
+            if (x >= r.left - m && x <= r.right + m && y >= r.top - m && y <= r.bottom + m) {
+                val d = hypot(x - r.centerX(), y - r.centerY())
+                if (d < bd) { bd = d; best = when (i) { 0 -> 1; 1 -> 2; 2 -> 3; else -> 6 } }
+            }
+        }
+        return best
+    }
+
     private fun down(id: Int, x: Float, y: Float) {
         if (id >= role.size) return
+        val nbHit = nbCount > 0 && x >= nbL && x <= nbR && y >= nbT && y <= nbB
+        val cr = if (nbHit) 0 else ctrlAt(x, y)
+        if (cr != 0) {
+            role[id] = cr
+            if (cr == 3) jumpReq = true else if (cr == 6) pbNew = true else sfx.play("tap", 0.3f)
+            refresh(); return
+        }
         when {
             nbCount > 0 && x >= nbL && x <= nbR && y >= nbT && y <= nbB -> { role[id] = 5; sfx.play("tap", 0.5f); val yy = y; queue { dismissNote(yy) } }
             rL.contains(x, y) -> { role[id] = 1; sfx.play("tap", 0.3f) }

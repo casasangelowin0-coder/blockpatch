@@ -157,9 +157,10 @@ class Profile(ctx: Context) {
     @Synchronized fun select(id: Int) {
         sel = id
         if (id == Id.FIST) return
-        val l = quick.filter { it != 0 && it != id }.toMutableList()
-        l.add(0, id)
-        for (i in quick.indices) quick[i] = if (i < l.size) l[i] else 0
+        // Hotbar slots stay where they are (like Growtopia): new items take the first empty slot.
+        if (quick.contains(id)) return
+        val empty = quick.indexOf(0)
+        if (empty >= 0) quick[empty] = id else quick[quick.size - 1] = id
     }
 
     @Synchronized fun isEquipped(id: Int): Boolean { val s = ItemDB[id].slot ?: return false; return equip[s.ordinal] == id }
